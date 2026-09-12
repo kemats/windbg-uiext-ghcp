@@ -1,0 +1,20 @@
+@import '@fontsource-variable/source-sans-3';
+@import '@fontsource/jetbrains-mono/400.css';
+
+:root { font-family: 'Source Sans 3 Variable', 'Yu Gothic UI', sans-serif; font-size: 14px; line-height: 1.5; color-scheme: light; --bg: #ffffff; --panel: #f6f7f7; --ink: #24292e; --muted: #626c70; --border: #dce1e2; --accent: #086a58; --accent-soft: #e5f3ed; --warn: #794516; --warn-bg: #fff3da; --error: #ae2546; --error-bg: #fff0f3; color: var(--ink); background: var(--bg); letter-spacing: 0; }
+:root[data-theme='dark'] { color-scheme: dark; --bg: #202224; --panel: #292c2e; --ink: #ededee; --muted: #adb4b7; --border: #414649; --accent: #79d7b6; --accent-soft: #234339; --warn: #eed090; --warn-bg: #403724; --error: #ff9bac; --error-bg: #422a31; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 240px; }
+button, textarea, select { font: inherit; color: inherit; }
+button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; border: 1px solid var(--border); background: var(--bg); border-radius: 4px; padding: 6px 10px; }
+button:hover:not(:disabled) { background: var(--panel); border-color: var(--muted); }
+button:disabled { opacity: .42; cursor: default; }
+button:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button svg { flex-shrink: 0; }
+code, pre { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+.icon { width: 30px; height: 30px; padding: 0; flex-shrink: 0; border-color: transparent; background: transparent; }
+.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+.primary:hover:not(:disabled) { color: var(--accent); background: var(--accent-soft); }
+.spin { animation: spin 1.5s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; } }

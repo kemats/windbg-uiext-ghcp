@@ -1,0 +1,140 @@
+name: Build and Release
+
+on:
+  push:
+    branches: ['main']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Determine version
+        id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          $version = '0.0.0-dev'
+          if ($env:REF_TYPE -eq 'tag') {
+            if ($env:REF_NAME -cnotmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$') {
+              throw 'Release tags must be vMAJOR.MINOR.PATCH with an optional prerelease suffix.'
+            }
+            $version = $env:REF_NAME.Substring(1)
+            if ($version.Contains('-')) {
+              foreach ($identifier in $version.Split('-', 2)[1].Split('.')) {
+                if ($identifier -match '^0[0-9]+$') { throw 'Invalid numeric prerelease identifier.' }
+              }
+            }
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "prerelease=$($version.Contains('-').ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Restore public dependencies in locked mode
+        run: dotnet restore windbg-uiext-ghcp.slnx --locked-mode --source https://api.nuget.org/v3/index.json
+      - name: Build, unit test and stage
+        env:
+          BUILD_VERSION: ${{ steps.version.outputs.version }}
+          RestoreLockedMode: 'true'
+        run: ./scripts/build.ps1 -Version $env:BUILD_VERSION -NoRestore
+      - name: Lint web sources
+        run: npm --prefix web run lint
+      - name: Browser tests
+        run: npm --prefix web run test:e2e
+      - name: Retain browser diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-diagnostics
+          path: |
+            web/playwright-report/
+            web/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Package versioned archive
+        env:
+          BUILD_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          ./scripts/release.ps1 -Version $env:BUILD_VERSION
+          ./scripts/test-release.ps1 -Version $env:BUILD_VERSION
+      - name: Verify publication license exists
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          if (!(Test-Path LICENSE -PathType Leaf) -or (Get-Item LICENSE).Length -eq 0) {
+            throw 'Select and commit the source LICENSE before publishing a release.'
+          }
+      - name: Stage release assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-package
+          path: |
+            artifacts/release/*.zip
+            artifacts/release/*.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - name: Require completed redistribution and host review
+        env:
+          PUBLIC_RELEASE_APPROVED: ${{ vars.PUBLIC_RELEASE_APPROVED }}
+        run: |
+          test "$PUBLIC_RELEASE_APPROVED" = 'true' || {
+            echo 'Complete licensing/notices and real-host review, then set PUBLIC_RELEASE_APPROVED=true in the release environment.'
+            exit 1
+          }
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-package
+          path: release
+      - name: Verify and publish tag assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ needs.build.outputs.version }}
+          PRERELEASE: ${{ needs.build.outputs.prerelease }}
+        working-directory: release
+        run: |
+          set -euo pipefail
+          archive="WinDbgCopilotChat-${RELEASE_VERSION}-win-x64.zip"
+          sha256sum --check "${archive}.sha256"
+          options=()
+          if [ "$PRERELEASE" = 'true' ]; then options+=(--prerelease --latest=false); fi
+          gh release create "$RELEASE_TAG" "$archive" "${archive}.sha256" \
+            --verify-tag --title "WinDbg Copilot Chat ${RELEASE_VERSION}" \
+            --generate-notes "${options[@]}"

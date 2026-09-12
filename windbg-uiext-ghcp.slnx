@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Bootstrap/Bootstrap.csproj" />
+    <Project Path="src/Contracts/Contracts.csproj" />
+    <Project Path="src/ChatCore/ChatCore.csproj" />
+    <Project Path="src/WinDbgChatView/WinDbgChatView.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ChatCore.Tests/ChatCore.Tests.csproj" />
+  </Folder>
+</Solution>
