@@ -11,7 +11,7 @@ The workflow deliberately fails tag publication without a nonempty source licens
 
 ## Candidate verification
 
-Use PowerShell 7.4+, .NET 10 SDK, Node.js 24 and Microsoft Edge on Windows x64:
+Use PowerShell 7.4+, .NET 10 SDK, Node.js 24 and Microsoft Edge on Windows x64 or ARM64. Run the following on each architecture being released; `-Architecture` defaults to the PowerShell process architecture:
 
 ```powershell
 dotnet restore windbg-uiext-ghcp.slnx --locked-mode
@@ -28,7 +28,7 @@ Commit all npm/NuGet lockfiles with dependency changes. GitHub-hosted CI explici
 
 The CLI is downloaded separately using the version declared by the SDK package, not an unpinned latest npm package. NuGet's `--no-restore` does not disable this download. For managed environments, supply `-CopilotCliBinaryPath` for a CLI obtained through an approved channel. Validate its actual version/compatibility during candidate review; the previously observed package/binary version discrepancy is not resolved by CI passing.
 
-`build.ps1 -Version` stamps the extension assemblies. `release.ps1` rejects a version different from those assemblies and creates an unsigned Windows x64 ZIP plus a SHA-256 sidecar in `artifacts/release`. The ZIP preserves `scripts/` and `artifacts/package/`, so the existing installer works after extraction. `release.json` records the package version and bundled CLI hash. Hashes detect corruption, not publisher identity; this workflow does not sign assemblies or provide a reproducible-build guarantee.
+`build.ps1 -Version` stamps the extension assemblies. `release.ps1` rejects a version different from those assemblies and creates an unsigned architecture-specific Windows ZIP plus a SHA-256 sidecar in `artifacts/release`. The ZIP preserves `scripts/` and `artifacts/package/`, so the existing installer works after extraction. `release.json` records the package version, architecture and bundled CLI hash. Hashes detect corruption, not publisher identity; this workflow does not sign assemblies or provide a reproducible-build guarantee.
 
 ## Publish by tag
 
@@ -41,7 +41,7 @@ git push origin v1.2.3
 
 Use `v1.2.3-rc.1` for a prerelease. Tags must start with lowercase `v`, contain three numeric components without leading zeros and may include a prerelease suffix. Numeric prerelease identifiers cannot have leading zeros. Build metadata (`+...`) is not accepted. Keep assembly version components within .NET version limits.
 
-Every tag rebuilds and tests that exact commit on Windows. Only after native/frontend tests, lint, Edge tests and archive validation pass are assets handed to the release job. It verifies SHA-256 and uses the short-lived `GITHUB_TOKEN` with `contents: write` to create a release for the existing tag. Other jobs have read-only repository permission; PRs never publish. No PAT, Copilot login, actual debugger, installation, signing service or Azure deployment is involved.
+Every tag rebuilds and tests that exact commit on Windows x64 and ARM64. Only after native/frontend tests, lint, Edge tests and archive validation pass are both architecture-specific assets handed to the release job. It verifies SHA-256 and uses the short-lived `GITHUB_TOKEN` with `contents: write` to create a release for the existing tag. Other jobs have read-only repository permission; PRs never publish. No PAT, Copilot login, actual debugger, installation, signing service or Azure deployment is involved.
 
 Prerelease tags create GitHub prereleases and are not marked latest. Normal version tags create ordinary releases with generated notes. Inspect release notes for changes and compatibility caveats. Existing releases are not overwritten: to correct a published binary, issue a new patch version. A failed unpublished tag run can be rerun after fixing environment approval, but changing code requires a new reviewed commit/tag.
 

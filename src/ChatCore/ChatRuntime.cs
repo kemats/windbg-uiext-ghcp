@@ -71,7 +71,7 @@ public sealed class ChatRuntime : IChatRuntime
             UseLoggedInUser = true, BaseDirectory = directory, WorkingDirectory = directory,
             Environment = CreateCliEnvironment(),
             Connection = RuntimeConnection.ForStdio(
-                path: Path.Combine(Path.GetDirectoryName(typeof(ChatRuntime).Assembly.Location)!, "runtimes", "win-x64", "native", "copilot.exe"),
+                path: Path.Combine(RuntimeAssets.NativeDirectory(Path.GetDirectoryName(typeof(ChatRuntime).Assembly.Location)!), "copilot.exe"),
                 args: ["--disable-builtin-mcps", "--no-custom-instructions"])
         });
         await _client.StartAsync();

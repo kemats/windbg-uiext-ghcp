@@ -4,7 +4,7 @@ Automated tests exercise this extension and its package boundaries. They do not 
 
 ## Automated checks
 
-Run on Windows x64 with the prerequisites in the [README](../README.md).
+Run on Windows x64 or ARM64 with the prerequisites in the [README](../README.md). The default package architecture matches the PowerShell process; use `-Architecture x64` or `-Architecture arm64` explicitly when needed.
 
 ```powershell
 ./scripts/build.ps1

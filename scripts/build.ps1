@@ -4,6 +4,8 @@ param(
     [string]$CopilotCliBinaryPath,
     [switch]$SkipWebBuild,
     [switch]$NoRestore,
+    [ValidateSet('x64', 'arm64')]
+    [string]$Architecture = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant(),
     [ValidatePattern('^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$')]
     [string]$Version = '0.0.0-dev'
 )
@@ -13,6 +15,7 @@ $root = Split-Path $PSScriptRoot -Parent
 $coreProject = Join-Path $root 'src/ChatCore/ChatCore.csproj'
 $hostProject = Join-Path $root 'src/Bootstrap/Bootstrap.csproj'
 $uiProject = Join-Path $root 'src/WinDbgChatView/WinDbgChatView.csproj'
+$rid = "win-$Architecture"
 $properties = @('-p:Configuration=Release', "-p:Version=$Version")
 if ($CopilotCliBinaryPath) {
     $binary = (Resolve-Path $CopilotCliBinaryPath).Path
@@ -52,9 +55,9 @@ New-Item $ui -ItemType Directory -Force | Out-Null
 foreach ($name in @('WinDbgCopilot.UI.dll', 'WinDbgCopilot.UI.deps.json', 'Microsoft.Web.WebView2.Core.dll', 'Microsoft.Web.WebView2.Wpf.dll')) {
     Copy-Item (Join-Path $uiOutput $name) $ui
 }
-$native = Join-Path $ui 'runtimes/win-x64/native'
+$native = Join-Path $ui "runtimes/$rid/native"
 New-Item $native -ItemType Directory -Force | Out-Null
-Copy-Item (Join-Path $uiOutput 'runtimes/win-x64/native/WebView2Loader.dll') $native
+Copy-Item (Join-Path $uiOutput "runtimes/$rid/native/WebView2Loader.dll") $native
 Get-ChildItem $package -File -Filter '*.dll' | ForEach-Object {
     if ($_.Name -notin @('WinDbgChatView.dll', 'WinDbgCopilot.Contracts.dll')) { throw "Unexpected root assembly: $($_.Name)" }
     [System.Reflection.AssemblyName]::GetAssemblyName($_.FullName) | Out-Null
@@ -64,8 +67,8 @@ Copy-Item (Join-Path $root 'LICENSE') $payload
 $licenses = Join-Path $payload 'third-party-licenses'
 node (Join-Path $PSScriptRoot 'collect-web-licenses.mjs') $licenses
 Get-ChildItem (Join-Path $root 'third-party-licenses') -File | Copy-Item -Destination $licenses
-$cli = Join-Path $payload 'core/runtimes/win-x64/native/copilot.exe'
-if (!(Test-Path $cli)) { throw 'Packaged Copilot CLI is missing.' }
+$cli = Join-Path $payload "core/runtimes/$rid/native/copilot.exe"
+if (!(Test-Path $cli)) { throw "Packaged Copilot CLI for $rid is missing." }
 if (Get-ChildItem $package -Recurse -File | Where-Object { $_.Name -like 'DbgX*.dll' -or $_.Name -in @('Fluent.dll', 'ControlzEx.dll') }) {
     throw 'Host-provided DbgX, Fluent and ControlzEx assemblies must not be packaged.'
 }

@@ -1,10 +1,17 @@
 using ChatCore;
 using Contracts;
+using System.Runtime.InteropServices;
 using Xunit;
 
 public sealed class ApprovalTests
 {
     private static readonly TargetInfo Target = new(true);
+
+    [Theory]
+    [InlineData(Architecture.X64, "win-x64")]
+    [InlineData(Architecture.Arm64, "win-arm64")]
+    public void RuntimeAssetsSelectSupportedArchitecture(Architecture architecture, string expected) =>
+        Assert.Equal(expected, RuntimeAssets.GetRuntimeIdentifier(architecture));
 
     public class InterfaceProxy : System.Reflection.DispatchProxy
     {

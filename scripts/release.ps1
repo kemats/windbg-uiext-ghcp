@@ -3,13 +3,16 @@
 param(
     [Parameter(Mandatory)]
     [ValidatePattern('^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$')]
-    [string]$Version
+    [string]$Version,
+    [ValidateSet('x64', 'arm64')]
+    [string]$Architecture = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant()
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 $package = Join-Path $root 'artifacts/package'
 $release = Join-Path $root 'artifacts/release'
 $staging = Join-Path $release 'staging'
+$rid = "win-$Architecture"
 if ($Version.Contains('-')) {
     foreach ($identifier in $Version.Split('-', 2)[1].Split('.')) {
         if ($identifier -match '^0[0-9]+$') { throw 'Numeric prerelease identifiers must not have leading zeros.' }
@@ -22,7 +25,7 @@ foreach ($relative in @('WinDbgChatView.dll', 'WinDbgCopilot.Contracts.dll',
     $productVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($path).ProductVersion
     if ($productVersion.Split('+', 2)[0] -cne $Version) { throw "Version mismatch in $relative. Build with -Version $Version first." }
 }
-$cli = Join-Path $package 'WinDbgCopilotChat/core/runtimes/win-x64/native/copilot.exe'
+$cli = Join-Path $package "WinDbgCopilotChat/core/runtimes/$rid/native/copilot.exe"
 if (!(Test-Path $cli -PathType Leaf)) { throw 'Packaged Copilot CLI is missing.' }
 if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
 New-Item (Join-Path $staging 'artifacts') -ItemType Directory -Force | Out-Null
@@ -37,11 +40,11 @@ foreach ($name in @('README.md', 'THIRD-PARTY-NOTICES.md', 'docs')) {
 if (Test-Path (Join-Path $root 'LICENSE') -PathType Leaf) { Copy-Item (Join-Path $root 'LICENSE') $staging }
 $metadata = [ordered]@{
     version = $Version
-    architecture = 'win-x64'
+    architecture = $rid
     copilotCliSha256 = (Get-FileHash $cli -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 $metadata | ConvertTo-Json | Set-Content (Join-Path $staging 'release.json') -Encoding utf8NoBOM
-$archive = Join-Path $release "WinDbgCopilotChat-$Version-win-x64.zip"
+$archive = Join-Path $release "WinDbgCopilotChat-$Version-$rid.zip"
 if (Test-Path $archive) { Remove-Item $archive -Force }
 try {
     [System.IO.Compression.ZipFile]::CreateFromDirectory($staging, $archive)

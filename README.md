@@ -11,13 +11,13 @@ The project's original source is licensed under the [MIT License](LICENSE). Depe
 
 ## Requirements
 
-- Windows x64, PowerShell 7.4+, .NET 10 SDK, Node.js 22.12+ or 24+.
-- A recent x64 WinDbg build compatible with the DbgX API referenced by this revision, and WebView2 Evergreen Runtime. Host compatibility can change independently; check the release notes and validate the intended WinDbg build.
+- Windows x64 or ARM64, PowerShell 7.4+, .NET 10 SDK, Node.js 22.12+ or 24+.
+- A recent WinDbg build matching the system architecture and compatible with the DbgX API referenced by this revision, and WebView2 Evergreen Runtime. Host compatibility can change independently; check the release notes and validate the intended WinDbg build.
 - GitHub Copilot access and CLI authentication. Credentials stay in the CLI, never in the JavaScript bridge.
 
 ## Install a release
 
-Download the Windows x64 ZIP and its SHA-256 sidecar from GitHub Releases, then verify the hash. Before extracting the trusted ZIP, open its Windows **Properties** and select **Unblock** if that option appears; alternatively run `Unblock-File` on the ZIP. This removes its Internet zone identifier before extraction so it is not propagated to every extracted file. Then extract it, close WinDbg, and run `./scripts/install.ps1 -WhatIf` followed by `./scripts/install.ps1` from the extracted directory. Do not flatten the archive. Release binaries are unsigned; review [release verification and installation](docs/releasing.md).
+Download the Windows ZIP matching WinDbg's architecture and its SHA-256 sidecar from GitHub Releases, then verify the hash. Before extracting the trusted ZIP, open its Windows **Properties** and select **Unblock** if that option appears; alternatively run `Unblock-File` on the ZIP. This removes its Internet zone identifier before extraction so it is not propagated to every extracted file. Then extract it, close WinDbg, and run `./scripts/install.ps1 -WhatIf` followed by `./scripts/install.ps1` from the extracted directory. Do not flatten the archive. Release binaries are unsigned; review [release verification and installation](docs/releasing.md).
 
 ## Build and install
 
@@ -35,8 +35,10 @@ The package is written to `artifacts/package`. DbgX/native debugger binaries are
 
 ```powershell
 $cliVersion = (dotnet msbuild ./src/ChatCore/ChatCore.csproj -getProperty:CopilotCliVersion).Trim()
-npm install --prefix artifacts/cli --ignore-scripts --no-audit --no-fund "@github/copilot-win32-x64@$cliVersion"
-./scripts/build.ps1 -CopilotCliBinaryPath ./artifacts/cli/node_modules/@github/copilot-win32-x64/copilot.exe
+$architecture = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant()
+$cliPackage = "@github/copilot-win32-$architecture"
+npm install --prefix artifacts/cli --ignore-scripts --no-audit --no-fund "$cliPackage@$cliVersion"
+./scripts/build.ps1 -CopilotCliBinaryPath "./artifacts/cli/node_modules/$cliPackage/copilot.exe"
 ```
 
 Stop any Vite preview/dev server before building: `npm ci` replaces Windows native modules that a running server can lock. For host-only changes, `-SkipWebBuild` reuses existing `web/dist` assets. Verify that the downloaded CLI is compatible with the referenced SDK; package metadata and the executable's reported version may not always be identical.

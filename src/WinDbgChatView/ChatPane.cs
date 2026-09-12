@@ -66,7 +66,7 @@ public sealed class ChatPane : Grid
             var assets = Path.GetFullPath(Path.Combine(root, "..", "web"));
             if (!File.Exists(Path.Combine(assets, "index.html"))) throw new FileNotFoundException("Bundled web assets are missing. Run scripts/build.ps1.");
             var userData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WinDbgCopilotChat", "webview");
-            CoreWebView2Environment.SetLoaderDllFolderPath(Path.Combine(root, "runtimes", "win-x64", "native"));
+            CoreWebView2Environment.SetLoaderDllFolderPath(RuntimeAssets.NativeDirectory(root));
             var environment = await CoreWebView2Environment.CreateAsync(userDataFolder: userData);
             await _browser.EnsureCoreWebView2Async(environment);
             var core = _browser.CoreWebView2;
@@ -185,7 +185,8 @@ public sealed class ChatPane : Grid
             var root = Path.GetDirectoryName(typeof(ChatPane).Assembly.Location)!;
             var directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WinDbgCopilotChat", "runtime");
             Directory.CreateDirectory(directory);
-            var start = CreateSignInStartInfo(Path.GetFullPath(Path.Combine(root, "..", "core", "runtimes", "win-x64", "native", "copilot.exe")), directory);
+            var core = Path.GetFullPath(Path.Combine(root, "..", "core"));
+            var start = CreateSignInStartInfo(Path.Combine(RuntimeAssets.NativeDirectory(core), "copilot.exe"), directory);
             using var process = System.Diagnostics.Process.Start(start) ?? throw new InvalidOperationException("Could not start Copilot sign-in.");
             await process.WaitForExitAsync();
             if (process.ExitCode != 0) throw new InvalidOperationException("Copilot sign-in did not complete. Connect again or retry sign-in.");
