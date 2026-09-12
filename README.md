@@ -9,6 +9,10 @@ This extension is based on a minimal WPF/MEF bootstrap, with a bundled React UI 
 
 The project's original source is licensed under the [MIT License](LICENSE). Dependencies remain under their own terms; see [Third-party dependencies](THIRD-PARTY-NOTICES.md). Binary packages include the applicable license texts under `WinDbgCopilotChat/third-party-licenses`.
 
+## Screenshot
+
+![WinDbg UI Extension for GitHub Copilot Chat](./docs/images/screenshot.png)
+
 ## Requirements
 
 - Windows x64 or ARM64, PowerShell 7.4+, .NET 10 SDK, Node.js 22.12+ or 24+.
