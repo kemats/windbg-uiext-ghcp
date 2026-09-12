@@ -1,8 +1,8 @@
 # WinDbg Copilot Chat
 
-A WinDbg UI extension for GitHub Copilot Chat. You can interact with Copilot directly within WinDbg through this extension, and it provides autonomous troubleshooting capabilities for multiple debug targets.
+A [WinDbg](http://aka.ms/windbg) UI extension for [GitHub Copilot](https://github.com/features/copilot). You can interact with Copilot directly within WinDbg through this extension, and it provides autonomous troubleshooting capabilities for multiple debug targets.
 
-This extension is based on a minimal WPF/MEF bootstrap, with a bundled React UI running in an isolated WebView2 control, and a separately isolated C# core that integrates with the [GitHub Copilot SDK](https://github.com/github/copilot-sdk).
+This extension is based on a minimal WPF/MEF bootstrap, with a bundled [React UI](https://react.dev/) running in an isolated [WebView2](http://aka.ms/webview2) control, and a separately isolated C# core that integrates with the [GitHub Copilot SDK](https://github.com/github/copilot-sdk).
 
 > [!IMPORTANT]
 > This project is a personal learning experiment involving creating UI extensions for DbgX and integrating the GitHub Copilot SDK, and it is neither a supported product nor an official implementation sample for either SDK. Also, WinDbg's UI extension APIs are not fully documented, and very little information is found in the XML documentation included with the [DbgX NuGet package](https://www.nuget.org/packages/Microsoft.Debugging.Platform.DbgX/) and https://github.com/kevingosse/windbg-extensions. Use this extension at your own risk, and review source code if you have any concerns. If WinDbg becomes unstable or not launching after installing this extension or updating WinDbg, remove the extension and restart WinDbg.
@@ -13,11 +13,17 @@ The project's original source is licensed under the [MIT License](LICENSE). Depe
 
 ![WinDbg UI Extension for GitHub Copilot Chat](./docs/images/screenshot.png)
 
-## Requirements
+## Runtime requirements
 
-- Windows x64 or ARM64, PowerShell 7.4+, .NET 10 SDK, Node.js 22.12+ or 24+.
-- A recent WinDbg build matching the system architecture and compatible with the DbgX API referenced by this revision, and WebView2 Evergreen Runtime. Host compatibility can change independently; check the release notes and validate the intended WinDbg build.
+- WinDbg x64 or ARM64 (version 1.2606.22001.0 or later).
+- WebView2 Evergreen Runtime installed.
 - GitHub Copilot access and CLI authentication. Credentials stay in the CLI, never in the JavaScript bridge.
+
+## Build requirements
+
+- PowerShell 7.4+.
+- .NET 10 SDK.
+- Node.js 22.12+ or 24+.
 
 ## Install a release
 
