@@ -28,9 +28,10 @@ if (!$SkipWebBuild) {
 }
 if (!(Test-Path (Join-Path $root 'web/dist/index.html'))) { throw 'Build the web assets first.' }
 [string[]]$restoreArguments = if ($NoRestore) { @('--no-restore') } else { @() }
+dotnet test (Join-Path $root 'tests/ChatCore.Tests/ChatCore.Tests.csproj') @properties @restoreArguments -p:CopilotSkipCliDownload=true
+# Tests intentionally omit the CLI. Build distributable outputs afterwards so the SDK target restores it.
 dotnet build $coreProject @properties @restoreArguments
 dotnet build $hostProject @properties @restoreArguments
-dotnet test (Join-Path $root 'tests/ChatCore.Tests/ChatCore.Tests.csproj') @properties @restoreArguments -p:CopilotSkipCliDownload=true
 $corePath = (dotnet msbuild $coreProject @properties -getProperty:TargetPath).Trim()
 $hostPath = (dotnet msbuild $hostProject @properties -getProperty:TargetPath).Trim()
 $uiPath = (dotnet msbuild $uiProject @properties -getProperty:TargetPath).Trim()
