@@ -6,6 +6,7 @@ import { Markdown } from './Markdown'
 import { useSpeech } from './useSpeech'
 import { credits, number, percent, time } from './metadata'
 import { ModelPicker } from './ModelPicker'
+import { ToolPicker } from './ToolPicker'
 import { Activity, Banner, ImagePreview, SessionHistory, SessionName } from './ChatExtras'
 import { fileAccept, fileSize, readAttachments } from './attachments'
 import type { DraftAttachment } from './attachments'
@@ -66,7 +67,7 @@ export default function App() {
         case 'error': setError((event.payload as { message: string }).message); setConnecting(false); setModelPending(false); setSessionPending(false); setSending(false); pendingSend.current = null; break
         case 'sessionChanged': setSessionPending(false); break
         case 'signInCancelled': setConnecting(false); break
-        case 'modelChanged': setModelPending(false); break
+        case 'modelChanged': case 'toolsChanged': setModelPending(false); break
         case 'connecting': setConnecting(true); break
         case 'disconnected':
           setConnecting(false); setState(initial); setSessionPending(false); setModelPending(false)
@@ -178,7 +179,7 @@ export default function App() {
         onClick={() => { speech.stop(); setError(null); setSessionPending(true); request('new', { model: state.model || undefined }) }}><Plus size={19} /></button>
     </header>
     {accountOpen && <section className="account-menu" aria-label="Account actions" onKeyDown={event => { if (event.key === 'Escape') setAccountOpen(false) }}>
-      <button type="button" onClick={() => { setAccountOpen(false); setHistoryOpen(false); setError(null); speech.stop(); setConnecting(true); request('signIn') }}><LogIn size={16} />Switch account</button>
+      <button type="button" onClick={() => { setAccountOpen(false); setHistoryOpen(false); setError(null); speech.stop(); setConnecting(true); request('signIn') }}><LogIn size={16} />{state.account?.authenticated ? 'Switch account' : 'Sign in'}</button>
       <button type="button" className="icon" aria-label="Close account menu" title="Close account menu" onClick={() => setAccountOpen(false)}><X size={15} /></button>
     </section>}
     {historyOpen && <SessionHistory sessions={state.sessions || []} selected={state.sessionId} busy={state.busy || sessionPending || modelPending || sending || readingFiles} onClose={() => setHistoryOpen(false)}
@@ -221,17 +222,17 @@ export default function App() {
           </div>}
         </div>}
       </article>})}
-      {state.approvals.map(approval => <section className="approval" key={approval.id} aria-label={approval.kind === 'share' ? 'Share output approval' : 'Execute command approval'}>
-        <div className="approval-heading"><ShieldCheck size={17} /><h2>{approval.kind === 'share' ? 'Share output with Copilot?' : 'Run debugger command?'}</h2></div>
+      {state.approvals.map(approval => <section className="approval" key={approval.id} aria-label={approval.kind === 'share' ? 'Share output approval' : approval.kind === 'execute' ? 'Execute command approval' : 'Tool permission approval'}>
+        <div className="approval-heading"><ShieldCheck size={17} /><h2>{approval.kind === 'share' ? 'Share output with Copilot?' : approval.kind === 'execute' ? 'Run debugger command?' : 'Allow tool access and result sharing?'}</h2></div>
         <pre>{approval.text || '(No output)'}</pre>
         <div className="approval-actions">
           <button onClick={() => request('approval', { approvalId: approval.id, approved: false })}><X size={14} />Deny</button>
-          <button className="primary" onClick={() => request('approval', { approvalId: approval.id, approved: true })}><Check size={14} />{approval.kind === 'share' ? 'Share output' : 'Run command'}</button>
+          <button className="primary" onClick={() => request('approval', { approvalId: approval.id, approved: true })}><Check size={14} />{approval.kind === 'share' ? 'Share output' : approval.kind === 'execute' ? 'Run command' : 'Allow'}</button>
         </div>
       </section>)}
     </div>
     {(error || state.error || speech.error) && <Banner key={state.sessionId + (error || state.error || speech.error)} text={error || state.error || speech.error || ''} kind="error" />}
-    {state.mode === 'ApproveAll' && <Banner key={state.sessionId + '-auto'} text="Approve all: commands and result sharing are automatically approved. Commands may change the target or execute code." kind="warning" />}
+    {state.mode === 'ApproveAll' && <Banner key={state.sessionId + '-auto'} text="Approve all: commands and result sharing are automatically approved, including enabled built-in and MCP tools. Tools may access files, contact services or execute code." kind="warning" />}
     <footer>
       <form className="composer" onSubmit={event => { event.preventDefault(); submit() }} onPaste={event => {
         const files = Array.from(event.clipboardData.files)
@@ -263,12 +264,17 @@ export default function App() {
             <ModelPicker models={state.models} selected={state.model} disabled={!state.sessionId || state.busy || sessionPending || modelPending || sending || readingFiles} onSelect={model => {
               setError(null); setModelPending(true); request('model', { model })
             }} />
+            <ToolPicker settings={state.toolSettings} connected={!!state.sessionId} disabled={state.busy || sessionPending || modelPending || sending || readingFiles}
+              onSelect={(tools, servers) => { setError(null); setModelPending(true); request('tools', { tools, servers }) }}
+              onLoad={() => { setError(null); setModelPending(true); request('loadMcp') }}
+              onAuthenticate={(server, forceReauth) => { setError(null); setModelPending(true); request(forceReauth ? 'reauthenticateMcp' : 'authenticateMcp', { text: server }) }}
+              onReload={() => { setError(null); setModelPending(true); request('reloadTools') }} />
             <div className="mode-switch" role="group" aria-label="Execution approval mode">
               {(['AskEveryTime', 'ApproveAll'] as Mode[]).map(mode => <button type="button" key={mode} aria-pressed={state.mode === mode} disabled={!state.sessionId}
                 onClick={() => request('mode', { mode })}>{mode === 'AskEveryTime' ? 'Ask every time' : 'Approve all'}</button>)}
             </div>
           </div>
-          {state.busy ? <button type="button" className="icon stop" title="Cancel response" aria-label="Cancel response" disabled={modelPending || state.status === 'Switching model'} onClick={() => request('cancel')}><Square size={15} /></button>
+          {state.busy ? <button type="button" className="icon stop" title="Cancel response" aria-label="Cancel response" disabled={modelPending || state.status === 'Switching model' || state.status === 'Updating tools'} onClick={() => request('cancel')}><Square size={15} /></button>
             : <button type="submit" className="icon primary" title={attachments.length ? 'Send message and attachments to Copilot' : 'Send message'} aria-label="Send message" disabled={(!draft.trim() && !attachments.length) || connecting || sessionPending || modelPending || sending || readingFiles || !state.sessionId}><ArrowUp size={19} /></button>}
         </div>
       </form>

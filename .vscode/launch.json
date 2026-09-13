@@ -1,0 +1,29 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "WinDbg: build, install, launch only",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": "pwsh -NoLogo -NoProfile -File \"${workspaceFolder}/scripts/debug.ps1\"",
+            "cwd": "${workspaceFolder}",
+            "noDebug": true,
+            "autoAttachChildProcesses": false
+        },
+        {
+            "name": "WinDbg: build, install, launch and attach",
+            "type": "coreclr",
+            "request": "attach",
+            "preLaunchTask": "WinDbg: build, install, launch",
+            "processName": "DbgX.Shell.exe",
+            "justMyCode": true
+        },
+        {
+            "name": "WinDbg: attach only",
+            "type": "coreclr",
+            "request": "attach",
+            "processId": "${command:pickProcess}",
+            "justMyCode": true
+        }
+    ]
+}

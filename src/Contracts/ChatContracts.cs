@@ -16,6 +16,9 @@ public sealed record SessionInfo(DateTimeOffset StartedAt, double? NanoAiu, int 
     double? ConversationTokens, double? MessagesLength);
 public sealed record ApprovalRequest(string Id, string Kind, string Text);
 public sealed record SessionEntry(string Id, string Title, DateTimeOffset UpdatedAt);
+public sealed record ToolOption(string Id, string Name, string Group, string? Description, bool Selected);
+public sealed record McpOption(string Name, bool Enabled, string Status, bool CanAuthenticate = false, bool CanReauthenticate = false);
+public sealed record ToolSettings(ToolOption[] Tools, McpOption[] Servers, string? ConfigPath, string? Error = null);
 public sealed record ModelOption(string Id, string Name, double? ContextTokens = null,
     double? MaxPromptTokens = null, bool? Vision = null, string[]? ReasoningEfforts = null,
     string? DefaultReasoningEffort = null, double? Multiplier = null, string? Policy = null, ModelPrices? Prices = null);
@@ -23,7 +26,7 @@ public sealed record ChatSnapshot(string SessionId, ApprovalMode Mode, bool Busy
     string Status, string? Error, string? Model, TargetInfo Target,
     ChatMessage[] Messages, ApprovalRequest[] Approvals, ModelOption[] Models,
     AccountInfo? Account = null, SessionInfo? Info = null, TurnInfo[]? Turns = null,
-    SessionEntry[]? Sessions = null, string? SessionTitle = null);
+    SessionEntry[]? Sessions = null, string? SessionTitle = null, ToolSettings? ToolSettings = null);
 
 public interface IDebuggerAdapter
 {
@@ -39,6 +42,9 @@ public interface IChatRuntime : IAsyncDisposable
     Task InitializeAsync(IDebuggerAdapter debugger);
     Task NewChatAsync(string? model);
     Task SetModelAsync(string model);
+    Task SetToolsAsync(string[] tools, string[] servers);
+    Task LoadMcpAsync(string? path);
+    Task<string?> AuthenticateMcpAsync(string server, bool forceReauth = false);
     Task ResumeAsync(string sessionId);
     Task RenameAsync(string sessionId, string title);
     Task DeleteAsync(string sessionId);

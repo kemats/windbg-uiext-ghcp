@@ -100,7 +100,7 @@ public sealed class ChatPane : Grid
 
     private sealed record BridgeRequest(int Version, string Type, string RequestId, string? SessionId,
         string? Text, string? Model, string? Mode, string? ApprovalId, bool? Approved,
-        ChatAttachment[]? Attachments, string? HistoryId);
+        ChatAttachment[]? Attachments, string? HistoryId, string[]? Tools, string[]? Servers);
 
     private async void OnMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs args)
     {
@@ -133,6 +133,8 @@ public sealed class ChatPane : Grid
             }
             var runtime = _runtime ?? throw new InvalidOperationException("Connect to Copilot first.");
             if (request.SessionId != runtime.Snapshot.SessionId) return;
+            var mcpPath = runtime.Snapshot.ToolSettings?.ConfigPath ?? Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WinDbgCopilotChat", "mcp.json");
             switch (request.Type)
             {
                 case "send": await runtime.SendAsync(request.Text ?? "", request.Attachments); break;
@@ -142,6 +144,49 @@ public sealed class ChatPane : Grid
                 case "rename": await runtime.RenameAsync(request.HistoryId ?? "", request.Text ?? ""); break;
                 case "delete": await runtime.DeleteAsync(request.HistoryId ?? ""); break;
                 case "command": await runtime.RunCommandAsync(request.Text ?? ""); break;
+                case "tools":
+                    var servers = request.Servers ?? [];
+                    var enabled = runtime.Snapshot.ToolSettings?.Servers.Where(server => server.Enabled).Select(server => server.Name).ToHashSet() ?? [];
+                    if (servers.Any(name => !enabled.Contains(name)) && MessageBox.Show(
+                        "Connecting MCP servers can launch local programs or contact remote services. Only connect servers whose configuration you trust. Continue?",
+                        "Connect MCP servers", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes)
+                    { Post("toolsChanged", new { }); break; }
+                    await runtime.SetToolsAsync(request.Tools ?? [], servers);
+                    Post("toolsChanged", new { });
+                    break;
+                case "reloadTools":
+                    await runtime.LoadMcpAsync(File.Exists(mcpPath) ? mcpPath : null);
+                    Post("toolsChanged", new { });
+                    break;
+                case "authenticateMcp":
+                case "reauthenticateMcp":
+                    var serverName = request.Text ?? "";
+                    var forceReauth = request.Type == "reauthenticateMcp";
+                    if (runtime.Snapshot.Busy) throw new InvalidOperationException("Wait for the current operation before signing in.");
+                    var authServer = runtime.Snapshot.ToolSettings?.Servers.FirstOrDefault(server => server.Name == serverName && server.Enabled &&
+                        (forceReauth ? server.CanReauthenticate : server.CanAuthenticate));
+                    if (authServer is null) throw new InvalidOperationException("Enable an HTTP MCP server before signing in.");
+                    var signInPrompt = forceReauth
+                        ? $"Clear the SDK's saved OAuth token for MCP server '{serverName}' and sign in again? This can affect other sessions using this server. Browser sign-in cookies are not cleared; choose the intended account in the browser."
+                        : $"Sign in to MCP server '{serverName}' using your browser? After signing in, return here.";
+                    if (MessageBox.Show(signInPrompt,
+                        "MCP sign-in", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) == MessageBoxResult.Yes)
+                    {
+                        var authorizationUrl = await runtime.AuthenticateMcpAsync(serverName, forceReauth);
+                        if (!string.IsNullOrEmpty(authorizationUrl))
+                        {
+                            var start = CreateMcpAuthenticationStartInfo(authorizationUrl);
+                            if (MessageBox.Show($"Open the authorization site {new Uri(start.FileName).GetLeftPart(UriPartial.Authority)} for '{serverName}'?",
+                                "Open MCP authorization", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) == MessageBoxResult.Yes)
+                            { using (System.Diagnostics.Process.Start(start)) { } }
+                        }
+                    }
+                    Post("toolsChanged", new { });
+                    break;
+                case "loadMcp":
+                    using (System.Diagnostics.Process.Start(CreateMcpEditorStartInfo(mcpPath))) { }
+                    Post("toolsChanged", new { });
+                    break;
                 case "model":
                     await runtime.SetModelAsync(request.Model ?? "");
                     Post("modelChanged", new { sessionId = request.SessionId });
@@ -160,11 +205,35 @@ public sealed class ChatPane : Grid
         catch (Exception exception) { Post("error", new { message = exception.Message }); }
     }
 
+    internal static System.Diagnostics.ProcessStartInfo CreateMcpAuthenticationStartInfo(string url)
+    {
+        if (url.Length > 16384 || url.Any(char.IsControl) || !Uri.TryCreate(url, UriKind.Absolute, out var uri)
+            || uri.Scheme != "https" || string.IsNullOrEmpty(uri.Host) || !string.IsNullOrEmpty(uri.UserInfo))
+            throw new ArgumentException("MCP authorization requires an HTTPS URL without embedded credentials.");
+        return new System.Diagnostics.ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true };
+    }
+
+    internal static System.Diagnostics.ProcessStartInfo CreateMcpEditorStartInfo(string path)
+    {
+        path = Path.GetFullPath(path);
+        if (!File.Exists(path))
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            using var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            JsonSerializer.Serialize(file, new { servers = new Dictionary<string, object>() }, new JsonSerializerOptions { WriteIndented = true });
+        }
+        return new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true, Verb = "open" };
+    }
+
     private async Task SignInAsync()
     {
-        if (_connecting || _runtime?.Snapshot.Busy == true) throw new InvalidOperationException("Wait for the current operation before switching accounts.");
-        if (MessageBox.Show("The current chat will be saved and disconnected. Follow the CLI sign-in flow in your browser. Select 'Use a different account' on GitHub to switch accounts. Continue?",
-            "Switch Copilot account", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes)
+        if (_connecting || _runtime?.Snapshot.Busy == true) throw new InvalidOperationException("Wait for the current operation before signing in.");
+        var switchingAccount = _runtime?.Snapshot.Account?.Authenticated == true;
+        var prompt = switchingAccount
+            ? "The current chat will be saved and disconnected. Follow the CLI sign-in flow in your browser. Select 'Use a different account' on GitHub to switch accounts. Continue?"
+            : "Sign in to GitHub Copilot using the official CLI and your browser? If the CLI is missing, you will be asked whether to install it using winget.";
+        if (MessageBox.Show(prompt,
+            switchingAccount ? "Switch Copilot account" : "Sign in to GitHub Copilot", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes)
         {
             Post("signInCancelled", new { });
             return;
@@ -173,6 +242,24 @@ public sealed class ChatPane : Grid
         Post("connecting", new { });
         try
         {
+            var signInCli = FindInstalledCommand(GetCommandSearchPath(), ["copilot.exe", "copilot.cmd"]);
+            if (signInCli is null)
+            {
+                if (MessageBox.Show("GitHub Copilot CLI is required for account sign-in but was not found. Install the official GitHub.Copilot package using winget? A separate window will show installation progress and any agreement prompts.",
+                    "Install GitHub Copilot CLI", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes)
+                {
+                    Post("signInCancelled", new { });
+                    return;
+                }
+                var winget = FindInstalledCommand(GetCommandSearchPath(), ["winget.exe"])
+                    ?? throw new InvalidOperationException("winget was not found. Install Windows App Installer, or install GitHub Copilot CLI manually, then retry account sign-in.");
+                using var installer = System.Diagnostics.Process.Start(CreateCopilotInstallStartInfo(winget))
+                    ?? throw new InvalidOperationException("Could not start the Copilot CLI installer.");
+                await installer.WaitForExitAsync();
+                if (installer.ExitCode != 0) throw new InvalidOperationException($"Copilot CLI installation did not complete (exit code {installer.ExitCode}). Retry account sign-in after installing it.");
+                signInCli = FindInstalledCommand(GetCommandSearchPath(), ["copilot.exe", "copilot.cmd"])
+                    ?? throw new InvalidOperationException("Copilot CLI was installed but could not be located. Restart WinDbg to refresh PATH, then retry account sign-in.");
+            }
             var runtime = _runtime;
             if (runtime is not null)
             {
@@ -182,17 +269,45 @@ public sealed class ChatPane : Grid
             }
             Post("disconnected", new { });
             Post("connecting", new { });
-            var root = Path.GetDirectoryName(typeof(ChatPane).Assembly.Location)!;
             var directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WinDbgCopilotChat", "runtime");
             Directory.CreateDirectory(directory);
-            var core = Path.GetFullPath(Path.Combine(root, "..", "core"));
-            var start = CreateSignInStartInfo(Path.Combine(RuntimeAssets.NativeDirectory(core), "copilot.exe"), directory);
+            var start = CreateSignInStartInfo(signInCli, directory);
             using var process = System.Diagnostics.Process.Start(start) ?? throw new InvalidOperationException("Could not start Copilot sign-in.");
             await process.WaitForExitAsync();
             if (process.ExitCode != 0) throw new InvalidOperationException("Copilot sign-in did not complete. Connect again or retry sign-in.");
         }
         finally { _connecting = false; }
         await ConnectAsync();
+    }
+
+    private static string GetCommandSearchPath() => string.Join(";",
+        Environment.GetEnvironmentVariable("PATH"),
+        Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.User),
+        Environment.GetEnvironmentVariable("PATH", EnvironmentVariableTarget.Machine),
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WinGet", "Links"),
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WindowsApps"));
+
+    internal static string? FindInstalledCommand(string searchPath, string[] names)
+    {
+        foreach (var entry in searchPath.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var directory = Environment.ExpandEnvironmentVariables(entry.Trim('"'));
+            if (!Path.IsPathFullyQualified(directory)) continue;
+            foreach (var name in names)
+            {
+                var candidate = Path.Combine(directory, name);
+                if (File.Exists(candidate)) return candidate;
+            }
+        }
+        return null;
+    }
+
+    internal static System.Diagnostics.ProcessStartInfo CreateCopilotInstallStartInfo(string wingetPath)
+    {
+        var start = new System.Diagnostics.ProcessStartInfo(wingetPath) { UseShellExecute = true };
+        foreach (var argument in new[] { "install", "--id", "GitHub.Copilot", "--exact", "--source", "winget", "--scope", "user" })
+            start.ArgumentList.Add(argument);
+        return start;
     }
 
     internal static System.Diagnostics.ProcessStartInfo CreateSignInStartInfo(string cliPath, string directory)

@@ -17,7 +17,10 @@ export interface SessionInfo {
   tokenLimit: number | null; systemTokens: number | null; toolDefinitionsTokens: number | null
   conversationTokens: number | null; messagesLength: number | null
 }
-export interface Approval { id: string; kind: 'execute' | 'share'; text: string }
+export interface ToolOption { id: string; name: string; group: string; description: string | null; selected: boolean }
+export interface McpOption { name: string; enabled: boolean; status: string; canAuthenticate?: boolean; canReauthenticate?: boolean }
+export interface ToolSettings { tools: ToolOption[]; servers: McpOption[]; configPath: string | null; error?: string | null }
+export interface Approval { id: string; kind: 'execute' | 'share' | 'tool' | 'permission'; text: string }
 export interface Snapshot {
   sessionId: string; mode: Mode; busy: boolean; status: string; error: string | null; model: string | null
   target: { available: boolean }
@@ -25,6 +28,7 @@ export interface Snapshot {
   account?: { login: string | null; host: string | null; authenticated: boolean } | null
   info?: SessionInfo | null; turns?: TurnInfo[] | null
   sessions?: SessionEntry[] | null; sessionTitle?: string | null
+  toolSettings?: ToolSettings | null
 }
 export interface Envelope { version: number; sequence: number; type: string; payload: unknown }
 export interface Request {
@@ -32,6 +36,7 @@ export interface Request {
   text?: string; model?: string; mode?: Mode; approvalId?: string; approved?: boolean
   attachments?: ChatAttachment[]
   historyId?: string
+  tools?: string[]; servers?: string[]
 }
 interface WebView {
   postMessage(request: Request): void
@@ -53,7 +58,13 @@ let mock: Snapshot = { ...initial, model: 'auto', sessionId: crypto.randomUUID()
   { id: 'demo-text', name: 'Demo text model', contextTokens: 16000, vision: false },
   { id: 'auto', name: 'Auto' },
 ],
-  account: { login: 'demo-user', host: 'github.com', authenticated: true }, info: demoInfo(), turns: [] }
+  account: { login: 'demo-user', host: 'github.com', authenticated: true }, info: demoInfo(), turns: [],
+  toolSettings: { configPath: 'mcp.json', servers: [{ name: 'example-mcp', enabled: false, status: 'disabled' }], tools: [
+    { id: 'debugger_command', name: 'debugger_command', group: 'WinDbg', description: 'Execute a command on the current target.', selected: true },
+    { id: 'debugger_target', name: 'debugger_target', group: 'WinDbg', description: 'Read current target details.', selected: true },
+    { id: 'view', name: 'view', group: 'Built-In', description: 'Read a file.', selected: false },
+    { id: 'powershell', name: 'powershell', group: 'Built-In', description: 'Execute a PowerShell command.', selected: false },
+  ] } }
 const listeners = new Set<(event: Envelope) => void>()
 const history = new Map<string, Snapshot>()
 function remember() {
@@ -110,7 +121,7 @@ function mockRequest(request: Request) {
     case 'resume': {
       remember()
       const saved = history.get(request.historyId || '')
-      if (saved) mock = { ...structuredClone(saved), sessions: mock.sessions, busy: false, mode: 'AskEveryTime', approvals: [] }
+      if (saved) mock = { ...structuredClone(saved), toolSettings: mock.toolSettings, sessions: mock.sessions, busy: false, mode: 'AskEveryTime', approvals: [] }
       emit(); listeners.forEach(listener => listener({ version: 1, sequence: ++sequence, type: 'sessionChanged', payload: {} })); break
     }
     case 'rename': {
@@ -127,6 +138,15 @@ function mockRequest(request: Request) {
     case 'command':
       mock.status = 'Ready'
       emit(); break
+    case 'tools':
+      if (mock.busy || !mock.toolSettings) return
+      mock.toolSettings.servers = mock.toolSettings.servers.map(server => ({ ...server, enabled: !!request.servers?.includes(server.name), canAuthenticate: false, status: request.servers?.includes(server.name) ? 'connected' : 'disabled' }))
+      mock.toolSettings.tools = mock.toolSettings.tools.filter(tool => tool.group !== 'example-mcp')
+      if (request.servers?.includes('example-mcp')) mock.toolSettings.tools.push({ id: 'example-mcp-read', name: 'read', group: 'example-mcp', description: 'Read example data.', selected: false })
+      mock.toolSettings.tools = mock.toolSettings.tools.map(tool => ({ ...tool, selected: !!request.tools?.includes(tool.id) }))
+      emit(); listeners.forEach(listener => listener({ version: 1, sequence: ++sequence, type: 'toolsChanged', payload: {} })); break
+    case 'reloadTools': case 'loadMcp': case 'authenticateMcp': case 'reauthenticateMcp':
+      emit(); listeners.forEach(listener => listener({ version: 1, sequence: ++sequence, type: 'toolsChanged', payload: {} })); break
     case 'model':
       if (mock.busy) return
       mock.model = request.model || null; emit()

@@ -1,5 +1,174 @@
 import { expect, test } from '@playwright/test'
 
+test('long tool descriptions stay compact and expand without changing selection', async ({ page }, testInfo) => {
+  await page.addInitScript(() => {
+    let handler: ((event: { data: unknown }) => void) | undefined
+    let sequence = 0
+    Object.defineProperty(window, 'chrome', { configurable: true, value: { webview: {
+      addEventListener: (_type: string, callback: typeof handler) => { handler = callback }, removeEventListener: () => {},
+      postMessage: () => handler?.({ data: { version: 1, sequence: ++sequence, type: 'snapshot', payload: {
+        sessionId: 'session', mode: 'AskEveryTime', busy: false, status: 'Ready', error: null, model: null,
+        target: { available: false }, approvals: [], models: [], messages: [],
+        toolSettings: { configPath: null, servers: [], tools: [
+          { id: 'view', name: 'view', group: 'Built-In', selected: false, description: 'Read a file. '.repeat(500) + 'END OF DESCRIPTION' },
+          { id: 'glob', name: 'glob', group: 'Built-In', selected: false, description: 'Find files by pattern.' },
+        ] },
+      } } }),
+    } } })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Configure tools', exact: true }).click()
+  const row = page.locator('.tool-row').filter({ has: page.getByRole('checkbox', { name: 'view', exact: true }) })
+  expect((await row.boundingBox())!.height).toBeLessThan(70)
+  await expect(page.getByRole('checkbox', { name: 'glob', exact: true })).toBeInViewport()
+  const details = page.getByLabel('Details for view', { exact: true })
+  await details.focus()
+  await page.keyboard.press('Enter')
+  const text = page.locator('.tool-description[open] .tool-description-text')
+  await expect(text).toContainText('END OF DESCRIPTION')
+  expect((await text.boundingBox())!.height).toBeLessThanOrEqual(160)
+  await text.evaluate(element => { element.scrollTop = element.scrollHeight })
+  await expect(page.getByRole('checkbox', { name: 'view', exact: true })).not.toBeChecked()
+  await page.screenshot({ path: testInfo.outputPath('tool-description.png') })
+  await details.click()
+  await expect(text).toHaveCount(0)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+})
+
+test('tool picker searches selects groups connects MCP and keeps choices across sessions', async ({ page }, testInfo) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Configure tools', exact: true }).click()
+  const picker = page.getByRole('dialog', { name: 'Choose tools' })
+  await expect(picker).toContainText('2 selected')
+  await picker.getByRole('button', { name: 'Open mcp.json' }).click()
+  await expect(picker.getByRole('button', { name: 'Open mcp.json' })).toBeEnabled()
+  await expect(picker).toContainText('2 selected')
+  await picker.getByRole('checkbox', { name: 'Select all Built-In tools', exact: true }).check()
+  await expect(picker).toContainText('4 selected')
+  await picker.getByRole('searchbox', { name: 'Search tools' }).fill('powershell')
+  await expect(picker.getByRole('checkbox', { name: 'view', exact: true })).toHaveCount(0)
+  await picker.getByRole('checkbox', { name: 'powershell', exact: true }).uncheck()
+  await picker.getByRole('searchbox', { name: 'Search tools' }).press('Enter')
+  await expect(page.locator('.message.user')).toHaveCount(0)
+  await picker.getByRole('searchbox', { name: 'Search tools' }).fill('')
+  await expect(picker.getByRole('checkbox', { name: 'Select all Built-In tools', exact: true })).toBeChecked({ indeterminate: true })
+  await picker.getByRole('checkbox', { name: 'Connect example-mcp', exact: true }).check()
+  await expect(picker.getByRole('status')).toHaveText('connected')
+  await expect(picker.getByRole('button', { name: 'Sign in to example-mcp' })).toHaveCount(0)
+  await picker.getByRole('checkbox', { name: 'read', exact: true }).check()
+  await expect(picker).toContainText('4 selected')
+  const bounds = (await picker.boundingBox())!
+  const searchBounds = (await picker.getByRole('searchbox', { name: 'Search tools' }).boundingBox())!
+  expect(searchBounds.y).toBeGreaterThanOrEqual(bounds.y)
+  expect(searchBounds.y + searchBounds.height).toBeLessThanOrEqual(bounds.y + bounds.height)
+  expect(bounds.y).toBeGreaterThanOrEqual(0)
+  expect(bounds.x).toBeGreaterThanOrEqual(0)
+  expect(bounds.x + bounds.width).toBeLessThanOrEqual(testInfo.project.use.viewport!.width)
+  const composer = (await page.locator('.composer').boundingBox())!
+  expect(bounds.y + bounds.height).toBeLessThanOrEqual(composer.y)
+  await page.screenshot({ path: testInfo.outputPath('tool-picker.png') })
+  await picker.getByRole('button', { name: 'Close tool picker' }).click()
+  await page.getByRole('button', { name: 'Approve all', exact: true }).click()
+  await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Remember this conversation')
+  await page.getByRole('button', { name: 'Send message', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Copy response' })).toBeVisible()
+  await page.getByRole('button', { name: 'Configure tools', exact: true }).click()
+  await picker.getByRole('checkbox', { name: 'view', exact: true }).uncheck()
+  await expect(page.locator('.message.user')).toContainText('Remember this conversation')
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('button', { name: 'Configure tools', exact: true })).toBeFocused()
+  await page.getByRole('button', { name: 'New chat', exact: true }).click()
+  await page.getByRole('button', { name: 'Configure tools', exact: true }).click()
+  await expect(picker).toContainText('3 selected')
+  await picker.getByRole('checkbox', { name: 'Connect example-mcp', exact: true }).uncheck()
+  await expect(picker.getByRole('button', { name: 'Sign in to example-mcp' })).toHaveCount(0)
+  await expect(picker.getByRole('checkbox', { name: 'read', exact: true })).toHaveCount(0)
+  await expect(picker).toContainText('2 selected')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+})
+
+test('tool picker is read only while a response awaits approval', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Configure tools', exact: true }).click()
+  await page.getByRole('checkbox', { name: 'Connect example-mcp', exact: true }).check()
+  await page.keyboard.press('Escape')
+  await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Inspect the target')
+  await page.getByRole('button', { name: 'Send message', exact: true }).click()
+  await expect(page.locator('.approval')).toBeVisible()
+  await page.getByRole('button', { name: 'Configure tools', exact: true }).click()
+  const picker = page.getByRole('dialog', { name: 'Choose tools' })
+  for (const checkbox of await picker.getByRole('checkbox').all()) await expect(checkbox).toBeDisabled()
+  await expect(picker.getByRole('button', { name: 'Open mcp.json' })).toBeDisabled()
+  await expect(picker.getByRole('button', { name: 'Reload tools' })).toBeDisabled()
+  await expect(picker.getByRole('button', { name: 'Sign in to example-mcp' })).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: 'Cancel response' }).click()
+  await page.getByRole('button', { name: 'Configure tools', exact: true }).click()
+  await expect(picker.getByRole('checkbox', { name: 'view', exact: true })).toBeEnabled()
+})
+
+test('tool picker sign in follows authentication-required status', async ({ page }, testInfo) => {
+  await page.addInitScript(() => {
+    let handler: ((event: { data: unknown }) => void) | undefined
+    let sequence = 0
+    let requestedServer = ''
+    let requestedType = ''
+    const snapshot = { sessionId: 'auth-test', mode: 'AskEveryTime', busy: false, status: 'Ready', error: null, model: null,
+      target: { available: false }, approvals: [], models: [], messages: [], toolSettings: { tools: [], configPath: 'mcp.json', servers: [
+        { name: 'public-mcp', enabled: true, status: 'connected', canAuthenticate: false },
+        { name: 'private-mcp', enabled: true, status: 'pending', canAuthenticate: false, canReauthenticate: true },
+      ] } }
+    const emit = () => handler?.({ data: { version: 1, sequence: ++sequence, type: 'snapshot', payload: structuredClone(snapshot) } })
+    Object.assign(window, { mcpAuthTest: {
+      requested: () => requestedServer,
+      requestedType: () => requestedType,
+      update: (status: string, busy: boolean) => {
+        Object.assign(snapshot.toolSettings.servers[1], { status, enabled: status !== 'disabled', canAuthenticate: status === 'needs-auth', canReauthenticate: status !== 'disabled' })
+        snapshot.busy = busy
+        emit()
+      },
+    } })
+    Object.assign(window, { chrome: { webview: {
+      addEventListener: (_type: string, callback: typeof handler) => { handler = callback },
+      removeEventListener: () => { handler = undefined },
+      postMessage: (request: { type: string; text?: string }) => {
+        if (request.type === 'authenticateMcp' || request.type === 'reauthenticateMcp') { requestedServer = request.text ?? ''; requestedType = request.type }
+        emit()
+        if (request.type === 'authenticateMcp' || request.type === 'reauthenticateMcp') handler?.({ data: { version: 1, sequence: ++sequence, type: 'toolsChanged', payload: {} } })
+      },
+    } } })
+  })
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Configure tools', exact: true }).click()
+  const picker = page.getByRole('dialog', { name: 'Choose tools' })
+  const signIn = picker.getByRole('button', { name: 'Sign in to private-mcp' })
+  const signInAgain = picker.getByRole('button', { name: 'Sign in again to private-mcp' })
+  await expect(signInAgain).toBeEnabled()
+  await expect(picker.getByRole('button', { name: 'Sign in to public-mcp' })).toHaveCount(0)
+  await expect(signIn).toHaveCount(0)
+  await page.evaluate(() => (window as unknown as { mcpAuthTest: { update: (status: string, busy: boolean) => void } }).mcpAuthTest.update('needs-auth', false))
+  await expect(signIn).toBeEnabled()
+  await signIn.click()
+  expect(await page.evaluate(() => (window as unknown as { mcpAuthTest: { requested: () => string } }).mcpAuthTest.requested())).toBe('private-mcp')
+  await page.screenshot({ path: testInfo.outputPath('mcp-auth-required.png') })
+  await page.evaluate(() => (window as unknown as { mcpAuthTest: { update: (status: string, busy: boolean) => void } }).mcpAuthTest.update('needs-auth', true))
+  await expect(signIn).toBeDisabled()
+  await expect(signInAgain).toBeDisabled()
+  for (const status of ['connected', 'pending', 'failed', 'not_configured', 'disabled']) {
+    await page.evaluate(status => (window as unknown as { mcpAuthTest: { update: (status: string, busy: boolean) => void } }).mcpAuthTest.update(status, false), status)
+    await expect(signIn).toHaveCount(0)
+    if (status === 'disabled') await expect(signInAgain).toHaveCount(0)
+    else await expect(signInAgain).toBeEnabled()
+  }
+  await page.evaluate(() => (window as unknown as { mcpAuthTest: { update: (status: string, busy: boolean) => void } }).mcpAuthTest.update('connected', false))
+  await signInAgain.click()
+  expect(await page.evaluate(() => (window as unknown as { mcpAuthTest: { requestedType: () => string } }).mcpAuthTest.requestedType())).toBe('reauthenticateMcp')
+  expect(await page.evaluate(() => (window as unknown as { mcpAuthTest: { requested: () => string } }).mcpAuthTest.requested())).toBe('private-mcp')
+  await expect(picker.getByRole('checkbox', { name: 'Select all private-mcp tools', exact: true })).toBeDisabled()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await page.screenshot({ path: testInfo.outputPath('mcp-sign-in-again.png') })
+})
+
 test('startup connects once and header actions stay right aligned through retry', async ({ page }, testInfo) => {
   await page.addInitScript(() => {
     let handler: ((event: { data: unknown }) => void) | undefined
@@ -62,6 +231,60 @@ test('startup connects once and header actions stay right aligned through retry'
   expect(await page.evaluate('window.headerTest.connections()')).toBe(2)
   expect(await assertRightAligned()).toBe(original)
 })
+
+for (const knownAccount of [false, true]) {
+  test(`initial sign in supports cancellation retry and success with known account ${knownAccount}`, async ({ page }, testInfo) => {
+    await page.addInitScript(known => {
+      let handler: ((event: { data: unknown }) => void) | undefined
+      let sequence = 0
+      let signIns = 0
+      const snapshot = { sessionId: '', mode: 'AskEveryTime', busy: false, status: 'Disconnected', error: null, model: null,
+        target: { available: false }, approvals: [], models: [], messages: [],
+        account: known ? { authenticated: false, login: '', host: 'github.com' } : null }
+      const emit = (type: string, payload: unknown = {}) => handler?.({ data: { version: 1, sequence: ++sequence, type, payload } })
+      Object.assign(window, { initialSignInRequests: () => signIns })
+      Object.defineProperty(window, 'chrome', { configurable: true, value: { webview: {
+        addEventListener: (_type: string, callback: typeof handler) => { handler = callback }, removeEventListener: () => {},
+        postMessage: (request: { type: string }) => {
+          if (request.type === 'ready') emit('snapshot', structuredClone(snapshot))
+          if (request.type === 'connect') emit('error', { message: 'Saved authentication unavailable' })
+          if (request.type !== 'signIn') return
+          signIns++
+          emit('connecting')
+          if (signIns === 1) { emit('signInCancelled'); return }
+          if (signIns === 2) { emit('error', { message: 'Copilot CLI installation did not complete' }); return }
+          snapshot.sessionId = 'first-session'
+          snapshot.status = 'Ready'
+          snapshot.account = { authenticated: true, login: 'first-user', host: 'github.com' }
+          emit('snapshot', structuredClone(snapshot))
+        },
+      } } })
+    }, knownAccount)
+    await page.goto('/')
+    await expect(page.getByRole('alert')).toContainText('Saved authentication unavailable')
+    expect(await page.evaluate('window.initialSignInRequests()')).toBe(0)
+    const account = page.getByRole('button', { name: 'GitHub account', exact: true })
+    await account.click()
+    await expect(page.getByRole('button', { name: 'Switch account', exact: true })).toHaveCount(0)
+    const signIn = page.getByRole('button', { name: 'Sign in', exact: true })
+    await expect(signIn).toBeEnabled()
+    await page.screenshot({ path: testInfo.outputPath('initial-sign-in.png') })
+    await signIn.click()
+    await expect(account).toBeEnabled()
+    await expect(page.getByRole('button', { name: 'Connect', exact: true })).toBeEnabled()
+    await account.click()
+    await signIn.click()
+    await expect(page.getByRole('alert')).toContainText('Copilot CLI installation did not complete')
+    await account.click()
+    await signIn.click()
+    await expect(account).toHaveText('@first-user')
+    expect(await page.evaluate('window.initialSignInRequests()')).toBe(3)
+    await account.click()
+    await expect(page.getByRole('button', { name: 'Switch account', exact: true })).toBeEnabled()
+    await expect(signIn).toHaveCount(0)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  })
+}
 
 test('current session title can be renamed and new chat starts empty', async ({ page }, testInfo) => {
   await page.goto('/')

@@ -3,7 +3,10 @@
 param(
     [string]$CopilotCliBinaryPath,
     [switch]$SkipWebBuild,
+    [switch]$SkipWebRestore,
     [switch]$NoRestore,
+    [ValidateSet('Debug', 'Release')]
+    [string]$Configuration = 'Release',
     [ValidateSet('x64', 'arm64')]
     [string]$Architecture = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant(),
     [ValidatePattern('^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$')]
@@ -16,7 +19,7 @@ $coreProject = Join-Path $root 'src/ChatCore/ChatCore.csproj'
 $hostProject = Join-Path $root 'src/Bootstrap/Bootstrap.csproj'
 $uiProject = Join-Path $root 'src/WinDbgChatView/WinDbgChatView.csproj'
 $rid = "win-$Architecture"
-$properties = @('-p:Configuration=Release', "-p:Version=$Version")
+$properties = @("-p:Configuration=$Configuration", "-p:Version=$Version")
 if ($CopilotCliBinaryPath) {
     $binary = (Resolve-Path $CopilotCliBinaryPath).Path
     $properties += "-p:CopilotCliBinaryPath=$binary"
@@ -24,7 +27,9 @@ if ($CopilotCliBinaryPath) {
 if (!$SkipWebBuild) {
     Push-Location (Join-Path $root 'web')
     try {
-        npm.cmd ci --no-audit --no-fund
+        if (!$SkipWebRestore -or !(Test-Path 'node_modules' -PathType Container)) {
+            npm.cmd ci --no-audit --no-fund
+        }
         npm.cmd test
         npm.cmd run build
     } finally { Pop-Location }
@@ -54,6 +59,12 @@ $ui = Join-Path $payload 'ui'
 New-Item $ui -ItemType Directory -Force | Out-Null
 foreach ($name in @('WinDbgCopilot.UI.dll', 'WinDbgCopilot.UI.deps.json', 'Microsoft.Web.WebView2.Core.dll', 'Microsoft.Web.WebView2.Wpf.dll')) {
     Copy-Item (Join-Path $uiOutput $name) $ui
+}
+if ($Configuration -eq 'Debug') {
+    foreach ($name in @('WinDbgChatView.pdb', 'WinDbgCopilot.Contracts.pdb')) {
+        Copy-Item (Join-Path $hostOutput $name) $package
+    }
+    Copy-Item (Join-Path $uiOutput 'WinDbgCopilot.UI.pdb') $ui
 }
 $native = Join-Path $ui "runtimes/$rid/native"
 New-Item $native -ItemType Directory -Force | Out-Null

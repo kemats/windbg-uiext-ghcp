@@ -7,6 +7,434 @@ public sealed class ApprovalTests
 {
     private static readonly TargetInfo Target = new(true);
 
+    #pragma warning disable GHCP001
+    [Theory]
+    [InlineData(null, true, false, true)]
+    [InlineData("*", true, false, true)]
+    [InlineData("read", true, false, true)]
+    [InlineData("other", true, false, false)]
+    [InlineData("", true, false, false)]
+    [InlineData("*", false, false, false)]
+    [InlineData("*", true, true, false)]
+    public async Task McpCatalogDetectsMissingToolsWithoutIgnoringConfiguredFilters(string? filter, bool enabled, bool present, bool expected)
+    {
+        await using var runtime = new ChatRuntime();
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        var definitions = (Dictionary<string, GitHub.Copilot.McpServerConfig>)typeof(ChatRuntime).GetField("_mcpDefinitions", flags)!.GetValue(runtime)!;
+        definitions["server"] = new GitHub.Copilot.McpHttpServerConfig { Url = "https://example.com/mcp", Tools = filter is null ? null : filter.Length == 0 ? [] : [filter] };
+        if (enabled) ((HashSet<string>)typeof(ChatRuntime).GetField("_enabledServers", flags)!.GetValue(runtime)!).Add("server");
+        var metadata = new List<GitHub.Copilot.Rpc.CurrentToolMetadata>();
+        if (present) metadata.Add(new() { Name = "server-read", McpServerName = "server", McpToolName = "read" });
+        var missing = Assert.IsType<string[]>(typeof(ChatRuntime).GetMethod("FindMissingMcpServers", flags)!.Invoke(runtime,
+            [metadata, new Dictionary<string, string[]> { ["server"] = ["read"], ["unknown"] = ["read"] }]));
+        Assert.Equal(expected ? ["server"] : Array.Empty<string>(), missing);
+    }
+    #pragma warning restore GHCP001
+
+    [Theory]
+    [InlineData("unknown")]
+    [InlineData("disabled")]
+    [InlineData("stdio")]
+    [InlineData("busy")]
+    [InlineData("disconnected")]
+    public async Task McpReauthenticationRejectsInvalidRequestsBeforeRpc(string scenario)
+    {
+        await using var runtime = new ChatRuntime();
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        if (scenario != "disconnected")
+            typeof(ChatRuntime).GetField("_client", flags)!.SetValue(runtime, new GitHub.Copilot.CopilotClient(new GitHub.Copilot.CopilotClientOptions()));
+        var definitions = (Dictionary<string, GitHub.Copilot.McpServerConfig>)typeof(ChatRuntime).GetField("_mcpDefinitions", flags)!.GetValue(runtime)!;
+        if (scenario != "unknown") definitions["server"] = scenario == "stdio"
+            ? new GitHub.Copilot.McpStdioServerConfig { Command = "unused" }
+            : new GitHub.Copilot.McpHttpServerConfig { Url = "https://example.com/mcp" };
+        if (scenario != "disabled") ((HashSet<string>)typeof(ChatRuntime).GetField("_enabledServers", flags)!.GetValue(runtime)!).Add("server");
+        typeof(ChatRuntime).GetMethod("ResetMcpSessionState", flags)!.Invoke(runtime, null);
+        if (scenario == "busy") typeof(ChatRuntime).GetField("_busy", flags)!.SetValue(runtime, true);
+        if (scenario is "busy" or "disconnected") await Assert.ThrowsAsync<InvalidOperationException>(() => runtime.AuthenticateMcpAsync("server", true));
+        else await Assert.ThrowsAsync<ArgumentException>(() => runtime.AuthenticateMcpAsync("server", true));
+    }
+
+    [Fact]
+    public async Task McpReconnectRejectsStaleConnectionAndCoalescesRefreshRequests()
+    {
+        await using var runtime = new ChatRuntime();
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var definitions = (Dictionary<string, GitHub.Copilot.McpServerConfig>)typeof(ChatRuntime).GetField("_mcpDefinitions", flags)!.GetValue(runtime)!;
+        definitions["server"] = new GitHub.Copilot.McpHttpServerConfig { Url = "https://example.com/mcp" };
+        ((HashSet<string>)typeof(ChatRuntime).GetField("_enabledServers", flags)!.GetValue(runtime)!).Add("server");
+        var reset = typeof(ChatRuntime).GetMethod("ResetMcpSessionState", flags)!;
+        var onEvent = typeof(ChatRuntime).GetMethod("OnSessionEvent", flags)!;
+        var refresh = typeof(ChatRuntime).GetField("_mcpRefreshRequested", flags)!;
+        var identity = runtime.Snapshot.SessionId;
+        void Emit(long generation, string status) => onEvent.Invoke(runtime, [generation, identity,
+            new GitHub.Copilot.SessionMcpServerStatusChangedEvent { Data = new() { ServerName = "server", Status = new(status) } }]);
+        var oldGeneration = (long)reset.Invoke(runtime, null)!;
+        Emit(oldGeneration, "connected");
+        Assert.True((bool)refresh.GetValue(runtime)!);
+        refresh.SetValue(runtime, false);
+        Emit(oldGeneration, "connected");
+        Assert.False((bool)refresh.GetValue(runtime)!);
+        var generation = (long)reset.Invoke(runtime, null)!;
+        Emit(oldGeneration, "connected");
+        Assert.Equal("pending", Assert.Single(runtime.Snapshot.ToolSettings!.Servers).Status);
+        Assert.False((bool)refresh.GetValue(runtime)!);
+        Emit(generation, "needs-auth");
+        Assert.True(Assert.Single(runtime.Snapshot.ToolSettings!.Servers).CanAuthenticate);
+        typeof(ChatRuntime).GetField("_busy", flags)!.SetValue(runtime, true);
+        var sessionField = typeof(ChatRuntime).GetField("_session", flags)!;
+        var session = System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(GitHub.Copilot.CopilotSession));
+        GC.SuppressFinalize(session);
+        sessionField.SetValue(runtime, session);
+        try
+        {
+            Emit(generation, "connected");
+            Assert.True((bool)refresh.GetValue(runtime)!);
+            Assert.Null(typeof(ChatRuntime).GetField("_mcpRefreshTask", flags)!.GetValue(runtime));
+        }
+        finally { sessionField.SetValue(runtime, null); }
+        refresh.SetValue(runtime, false);
+        Emit(generation, "pending");
+        Emit(generation, "connected");
+        Assert.True((bool)refresh.GetValue(runtime)!);
+        Assert.Empty(runtime.Snapshot.Messages);
+    }
+
+    [Fact]
+    public async Task McpStatusEventsUpdateIdlePickerWithoutStartingAuthentication()
+    {
+        await using var runtime = new ChatRuntime();
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var definitions = (Dictionary<string, GitHub.Copilot.McpServerConfig>)typeof(ChatRuntime).GetField("_mcpDefinitions", flags)!.GetValue(runtime)!;
+        definitions["server"] = new GitHub.Copilot.McpHttpServerConfig { Url = "https://example.com/mcp" };
+        var enabled = (HashSet<string>)typeof(ChatRuntime).GetField("_enabledServers", flags)!.GetValue(runtime)!;
+        enabled.Add("server");
+        var onEvent = typeof(ChatRuntime).GetMethod("OnEvent", flags)!;
+        var applySnapshot = typeof(ChatRuntime).GetMethod("ApplyMcpStatusSnapshot", flags)!;
+        var statusVersion = typeof(ChatRuntime).GetField("_mcpStatusVersion", flags)!;
+        var identity = runtime.Snapshot.SessionId;
+        var publications = 0;
+        runtime.Changed += _ => publications++;
+        void Status(string status, string? session = null, string server = "server") => onEvent.Invoke(runtime, [session ?? identity,
+            new GitHub.Copilot.SessionMcpServerStatusChangedEvent { Data = new() { ServerName = server, Status = new(status) } }]);
+        Status("pending");
+        Assert.Equal("pending", Assert.Single(runtime.Snapshot.ToolSettings!.Servers).Status);
+        Assert.False(runtime.Snapshot.Busy);
+        var requestedAtVersion = (long)statusVersion.GetValue(runtime)!;
+        Status("needs-auth");
+        applySnapshot.Invoke(runtime, [new Dictionary<string, string> { ["server"] = "pending" }, requestedAtVersion]);
+        Assert.True(Assert.Single(runtime.Snapshot.ToolSettings!.Servers).CanAuthenticate);
+        Status("connected", "old-session");
+        Assert.Equal("needs-auth", Assert.Single(runtime.Snapshot.ToolSettings!.Servers).Status);
+        Status("connected");
+        Assert.False(Assert.Single(runtime.Snapshot.ToolSettings!.Servers).CanAuthenticate);
+        onEvent.Invoke(runtime, [identity, new GitHub.Copilot.McpOauthRequiredEvent
+        { Data = new() { Reason = new("missing-credentials"), RequestId = "request", ServerName = "server", ServerUrl = "https://example.com/mcp" } }]);
+        Assert.True(Assert.Single(runtime.Snapshot.ToolSettings!.Servers).CanAuthenticate);
+        Status("failed", server: "unknown");
+        Assert.Single(runtime.Snapshot.ToolSettings!.Servers);
+        enabled.Clear();
+        Status("pending");
+        Assert.Equal("needs-auth", Assert.Single(runtime.Snapshot.ToolSettings!.Servers).Status);
+        applySnapshot.Invoke(runtime, [new Dictionary<string, string> { ["server"] = "pending" }, requestedAtVersion]);
+        Assert.Equal("disabled", Assert.Single(runtime.Snapshot.ToolSettings!.Servers).Status);
+        Assert.False(Assert.Single(runtime.Snapshot.ToolSettings!.Servers).CanAuthenticate);
+        enabled.Add("server");
+        applySnapshot.Invoke(runtime, [new Dictionary<string, string> { ["server"] = "connected" }, (long)statusVersion.GetValue(runtime)!]);
+        Assert.Equal("connected", Assert.Single(runtime.Snapshot.ToolSettings!.Servers).Status);
+        Assert.True(publications >= 4);
+        Assert.Empty(runtime.Snapshot.Messages);
+    }
+
+    [Theory]
+    [InlineData("needs-auth", true, true, true)]
+    [InlineData("connected", true, true, false)]
+    [InlineData("pending", true, true, false)]
+    [InlineData("failed", true, true, false)]
+    [InlineData("not_configured", true, true, false)]
+    [InlineData("disabled", false, true, false)]
+    [InlineData("needs-auth", false, true, false)]
+    [InlineData("needs-auth", true, false, false)]
+    public void McpSignInIsAvailableOnlyWhenAuthenticationIsRequired(string status, bool enabled, bool http, bool expected)
+    {
+        GitHub.Copilot.McpServerConfig definition = http
+            ? new GitHub.Copilot.McpHttpServerConfig { Url = "https://example.com/mcp" }
+            : new GitHub.Copilot.McpStdioServerConfig { Command = "unused" };
+        var method = typeof(ChatRuntime).GetMethod("CreateMcpOption", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+        var option = Assert.IsType<McpOption>(method.Invoke(null, ["server", enabled, status, definition]));
+        Assert.Equal(expected, option.CanAuthenticate);
+        Assert.Equal(enabled && http, option.CanReauthenticate);
+        Assert.Equal(status, option.Status);
+        Assert.Equal(enabled, option.Enabled);
+    }
+
+    [Theory]
+    [InlineData("unknown")]
+    [InlineData("disabled")]
+    [InlineData("stdio")]
+    [InlineData("busy")]
+    [InlineData("disconnected")]
+    [InlineData("connected")]
+    public async Task McpAuthenticationRejectsInvalidRequestsBeforeRpc(string scenario)
+    {
+        await using var runtime = new ChatRuntime();
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+        if (scenario != "disconnected")
+            typeof(ChatRuntime).GetField("_client", flags)!.SetValue(runtime, new GitHub.Copilot.CopilotClient(new GitHub.Copilot.CopilotClientOptions()));
+        var definitions = (Dictionary<string, GitHub.Copilot.McpServerConfig>)typeof(ChatRuntime).GetField("_mcpDefinitions", flags)!.GetValue(runtime)!;
+        if (scenario != "unknown") definitions["server"] = scenario == "stdio"
+            ? new GitHub.Copilot.McpStdioServerConfig { Command = "unused" }
+            : new GitHub.Copilot.McpHttpServerConfig { Url = "https://example.com/mcp" };
+        if (scenario != "disabled") ((HashSet<string>)typeof(ChatRuntime).GetField("_enabledServers", flags)!.GetValue(runtime)!).Add("server");
+        if (scenario == "busy") typeof(ChatRuntime).GetField("_busy", flags)!.SetValue(runtime, true);
+        if (scenario is "busy" or "disconnected") await Assert.ThrowsAsync<InvalidOperationException>(() => runtime.AuthenticateMcpAsync("server"));
+        else await Assert.ThrowsAsync<ArgumentException>(() => runtime.AuthenticateMcpAsync("server"));
+    }
+
+    [Theory]
+    [InlineData("https://login.microsoftonline.com/common/oauth2/v2.0/authorize?state=test", true)]
+    [InlineData("http://login.example.com/authorize", false)]
+    [InlineData("file:///C:/test.exe", false)]
+    [InlineData("javascript:alert(1)", false)]
+    [InlineData("https://user:password@example.com/", false)]
+    [InlineData("https://example.com/\n", false)]
+    public void McpAuthenticationOpensOnlySafeHttpsUrls(string url, bool allowed)
+    {
+        var method = typeof(WinDbgChatView.ChatPane).GetMethod("CreateMcpAuthenticationStartInfo",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+        if (!allowed)
+        {
+            var failure = Assert.Throws<System.Reflection.TargetInvocationException>(() => method.Invoke(null, [url]));
+            Assert.IsType<ArgumentException>(failure.InnerException);
+            return;
+        }
+        var start = Assert.IsType<System.Diagnostics.ProcessStartInfo>(method.Invoke(null, [url]));
+        Assert.True(start.UseShellExecute);
+        Assert.Equal(url, start.FileName);
+        Assert.Empty(start.ArgumentList);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("{\"servers\":{}}")]
+    [InlineData("{ invalid JSON being edited")]
+    public void McpEditorCreatesMissingFileAndPreservesExistingContents(string? existing)
+    {
+        var directory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "mcp editor & test " + Guid.NewGuid().ToString("N"));
+        var path = System.IO.Path.Combine(directory, "settings", "mcp.json");
+        try
+        {
+            if (existing is not null)
+            {
+                System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
+                System.IO.File.WriteAllText(path, existing);
+            }
+            var method = typeof(WinDbgChatView.ChatPane).GetMethod("CreateMcpEditorStartInfo",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+            var start = Assert.IsType<System.Diagnostics.ProcessStartInfo>(method.Invoke(null, [path]));
+            Assert.Equal(path, start.FileName);
+            Assert.True(start.UseShellExecute);
+            Assert.Equal("open", start.Verb);
+            Assert.Empty(start.Arguments);
+            Assert.Empty(start.ArgumentList);
+            if (existing is not null) Assert.Equal(existing, System.IO.File.ReadAllText(path));
+            else Assert.Empty(ToolConfiguration.Load(path));
+            var contents = System.IO.File.ReadAllText(path);
+            method.Invoke(null, [path]);
+            Assert.Equal(contents, System.IO.File.ReadAllText(path));
+        }
+        finally { if (System.IO.Directory.Exists(directory)) System.IO.Directory.Delete(directory, true); }
+    }
+
+    [Theory]
+    [InlineData("success", 0, "build,install,launch")]
+    [InlineData("restore", 0, "build,install,launch")]
+    [InlineData("build-failure", 1, "build")]
+    [InlineData("install-failure", 1, "build,install")]
+    [InlineData("running", 1, "")]
+    [InlineData("preview", 0, "")]
+    public async Task F5WorkflowOrdersStagesAndStopsOnFailure(string scenario, int exitCode, string stages)
+    {
+        var root = new System.IO.DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !System.IO.File.Exists(System.IO.Path.Combine(root.FullName, "scripts", "debug.ps1"))) root = root.Parent;
+        Assert.NotNull(root);
+        var directory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "windbg f5 & test " + Guid.NewGuid().ToString("N"));
+        System.IO.Directory.CreateDirectory(directory);
+        try
+        {
+            System.IO.File.Copy(System.IO.Path.Combine(root.FullName, "scripts", "debug.ps1"), System.IO.Path.Combine(directory, "debug.ps1"));
+            await System.IO.File.WriteAllTextAsync(System.IO.Path.Combine(directory, "build.ps1"), """
+                param($Configuration, $Architecture, [switch]$SkipWebBuild, [switch]$SkipWebRestore, [switch]$NoRestore)
+                if ($Configuration -ne 'Debug' -or $SkipWebBuild -or !$NoRestore) { throw 'Incorrect build arguments' }
+                if ($SkipWebRestore -ne ($env:F5_TEST_SCENARIO -ne 'restore')) { throw 'Incorrect dependency restore policy' }
+                Write-Output 'STAGE:build'
+                if ($env:F5_TEST_SCENARIO -eq 'build-failure') { throw 'Simulated build failure' }
+                """);
+            await System.IO.File.WriteAllTextAsync(System.IO.Path.Combine(directory, "install.ps1"), """
+                Write-Output 'STAGE:install'
+                if ($env:F5_TEST_SCENARIO -eq 'install-failure') { throw 'Simulated install failure' }
+                """);
+            var runner = System.IO.Path.Combine(directory, "run.ps1");
+            await System.IO.File.WriteAllTextAsync(runner, """
+                $ErrorActionPreference = 'Stop'
+                function Get-Process { param($Name, $ErrorAction) if ($env:F5_TEST_SCENARIO -eq 'running') { 'Existing WinDbg' } }
+                function Start-Process {
+                    param($FilePath, $WorkingDirectory)
+                    if ($FilePath -ne 'WinDbgX.exe') { throw 'Must shell-launch the WinDbgX.exe app execution alias' }
+                    Write-Output 'STAGE:launch'
+                }
+                try {
+                    & (Join-Path $PSScriptRoot 'debug.ps1') -NoRestore -RestoreWebDependencies:($env:F5_TEST_SCENARIO -eq 'restore') -WhatIf:($env:F5_TEST_SCENARIO -eq 'preview')
+                } catch { Write-Output $_.Exception.Message; exit 1 }
+                """);
+            var start = new System.Diagnostics.ProcessStartInfo("pwsh")
+            {
+                UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true
+            };
+            foreach (var argument in new[] { "-NoLogo", "-NoProfile", "-File", runner }) start.ArgumentList.Add(argument);
+            start.Environment["F5_TEST_SCENARIO"] = scenario;
+            using var process = System.Diagnostics.Process.Start(start)!;
+            var output = process.StandardOutput.ReadToEndAsync();
+            var error = process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            var text = await output;
+            Assert.True(process.ExitCode == exitCode, text + await error);
+            Assert.Equal(stages, string.Join(",", text.Split('\n').Where(line => line.StartsWith("STAGE:")).Select(line => line[6..].Trim())));
+        }
+        finally { System.IO.Directory.Delete(directory, true); }
+    }
+
+    #pragma warning disable GHCP001
+    [Theory]
+    [InlineData("powershell", "bash")]
+    [InlineData("bash", "powershell")]
+    public async Task ToolCatalogUsesSessionMetadataAndRemovesUnsupportedSelections(string shell, string absentShell)
+    {
+        await using var runtime = new ChatRuntime();
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var selected = (HashSet<string>)typeof(ChatRuntime).GetField("_selectedTools", flags)!.GetValue(runtime)!;
+        selected.UnionWith(["skill", "ask_user", "agent", "task", shell, absentShell, "view", "obsolete_tool"]);
+        var enabled = (HashSet<string>)typeof(ChatRuntime).GetField("_enabledServers", flags)!.GetValue(runtime)!;
+        enabled.Add("example");
+        var shellTools = new[] { shell, "read_" + shell, "stop_" + shell, "list_" + shell };
+        var metadata = new[] { "skill", "ask_user", "agent", "task", "view", "str_replace_editor", "grep", "glob" }.Concat(shellTools)
+            .Select(name => new GitHub.Copilot.Rpc.CurrentToolMetadata { Name = name, Description = "Session-specific " + name }).ToList();
+        metadata.Add(new() { Name = "example-task", McpServerName = "example", McpToolName = "task" });
+        metadata.Add(new() { Name = "disabled-task", McpServerName = "disabled", McpToolName = "task" });
+        var update = typeof(ChatRuntime).GetMethod("UpdateToolCatalog", flags)!;
+        update.Invoke(runtime, [metadata]);
+        var catalog = runtime.Snapshot.ToolSettings!.Tools;
+        foreach (var name in new[] { "skill", "ask_user", "agent", "task", "obsolete_tool", "disabled-task", absentShell })
+        {
+            Assert.DoesNotContain(catalog, tool => tool.Id == name);
+            Assert.DoesNotContain(name, selected);
+        }
+        Assert.Contains(shell, selected);
+        foreach (var name in new[] { "view", "str_replace_editor", "grep", "glob", "debugger_command", "debugger_target", "example-task" }.Concat(shellTools))
+            Assert.Contains(catalog, tool => tool.Id == name);
+        Assert.Equal("Session-specific view", Assert.Single(catalog, tool => tool.Id == "view").Description);
+        Assert.Contains("view", selected);
+        update.Invoke(runtime, [new List<GitHub.Copilot.Rpc.CurrentToolMetadata> { new() { Name = shell } }]);
+        Assert.DoesNotContain(runtime.Snapshot.ToolSettings!.Tools, tool => tool.Id == "view");
+        Assert.DoesNotContain("view", selected);
+    }
+    #pragma warning restore GHCP001
+
+    [Fact]
+    public void McpConfigurationReadsVscodeAndSdkFormatsWithoutStartingServers()
+    {
+        using var document = System.Text.Json.JsonDocument.Parse("""
+            {"servers":{"local":{"command":"test-mcp","args":["${userHome}"],"env":{"MODE":"test"}},
+            "remote":{"type":"http","url":"https://example.com/mcp","tools":["read"],"timeout":10000}}}
+            """);
+        var servers = ToolConfiguration.Parse(document.RootElement, System.IO.Path.GetTempPath());
+        var local = Assert.IsType<GitHub.Copilot.McpStdioServerConfig>(servers["local"]);
+        Assert.Equal(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), Assert.Single(local.Args!));
+        Assert.Equal("test", local.Env!["MODE"]);
+        Assert.Equal("read", Assert.Single(servers["remote"].Tools!));
+        Assert.Equal(10000, servers["remote"].Timeout);
+        using var sdk = System.Text.Json.JsonDocument.Parse("""{"mcpServers":{"local":{"type":"local","command":"test"}}}""");
+        Assert.Single(ToolConfiguration.Parse(sdk.RootElement, System.IO.Path.GetTempPath()));
+    }
+
+    [Theory]
+    [InlineData("servers", "\"command\":\"test\"")]
+    [InlineData("servers", "\"type\":\"http\",\"url\":\"https://example.com/mcp\"")]
+    [InlineData("mcpServers", "\"command\":\"test\"")]
+    [InlineData("mcpServers", "\"type\":\"http\",\"url\":\"https://example.com/mcp\"")]
+    public void McpConfigurationMakesDefaultToolSelectionExplicit(string format, string transport)
+    {
+        foreach (var selection in new[] { "", ",\"tools\":[]", ",\"tools\":[\"read\"]", ",\"tools\":[\"*\"]" })
+        {
+            using var document = System.Text.Json.JsonDocument.Parse($$$$"""{"{{{{format}}}}":{"test":{ {{{{transport}}}}{{{{selection}}}} }}}""");
+            var config = Assert.Single(ToolConfiguration.Parse(document.RootElement, System.IO.Path.GetTempPath())).Value;
+            string[] expected = selection.Contains("[]") ? [] : selection.Contains("read") ? ["read"] : ["*"];
+            Assert.Equal(expected, config.Tools);
+        }
+    }
+
+    [Theory]
+    [InlineData("{\"servers\":{\"test\":{\"command\":\"${input:secret}\"}}}")]
+    [InlineData("{\"servers\":{\"test\":{\"type\":\"http\",\"url\":\"file:///secret\"}}}")]
+    [InlineData("{\"servers\":{\"test\":{\"type\":\"unknown\"}}}")]
+    [InlineData("{}")]
+    [InlineData("{\"servers\":{\"test\":{\"command\":\"test\",\"timeout\":0}}}")]
+    [InlineData("{\"servers\":{\"test\":{\"command\":\"test\",\"tools\":[null]}}}")]
+    [InlineData("{\"servers\":{\"test\":{\"command\":\"test\",\"envFile\":\".env\"}}}")]
+    public void McpConfigurationRejectsUnsupportedValues(string json)
+    {
+        using var document = System.Text.Json.JsonDocument.Parse(json);
+        Assert.Throws<ArgumentException>(() => ToolConfiguration.Parse(document.RootElement, System.IO.Path.GetTempPath()));
+    }
+
+    [Fact]
+    public async Task ToolSelectionGatesExecutionApprovalAndCancellation()
+    {
+        await using var runtime = new ChatRuntime();
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var config = (GitHub.Copilot.SessionConfig)typeof(ChatRuntime).GetMethod("Configure", flags)!
+            .MakeGenericMethod(typeof(GitHub.Copilot.SessionConfig)).Invoke(runtime, [new GitHub.Copilot.SessionConfig()])!;
+        Assert.Equal(new[] { "debugger_command", "debugger_target" }, config.AvailableTools);
+        Assert.Empty(config.McpServers!);
+        Assert.Equal(GitHub.Copilot.McpOAuthTokenStorageMode.Persistent, config.McpOAuthTokenStorage);
+        var input = new GitHub.Copilot.PreToolUseHookInput { SessionId = runtime.Snapshot.SessionId, ToolName = "view" };
+        var invoke = new GitHub.Copilot.HookInvocation();
+        Assert.Equal("deny", (await config.Hooks!.OnPreToolUse!(input, invoke))!.PermissionDecision);
+        typeof(ChatRuntime).GetField("_busy", flags)!.SetValue(runtime, true);
+        var cancellation = new CancellationTokenSource();
+        typeof(ChatRuntime).GetField("_cancellation", flags)!.SetValue(runtime, cancellation);
+        Assert.Equal("deny", (await config.Hooks.OnPreToolUse(input, invoke))!.PermissionDecision);
+        var selected = (HashSet<string>)typeof(ChatRuntime).GetField("_selectedTools", flags)!.GetValue(runtime)!;
+        selected.Add("view");
+        var pending = config.Hooks.OnPreToolUse(input, invoke);
+        var approval = Assert.Single(runtime.Snapshot.Approvals);
+        Assert.Equal("tool", approval.Kind);
+        runtime.ResolveApproval(runtime.Snapshot.SessionId, approval.Id, false);
+        Assert.Equal("deny", (await pending)!.PermissionDecision);
+        runtime.SetMode(ApprovalMode.ApproveAll);
+        Assert.Equal("allow", (await config.Hooks.OnPreToolUse(input, invoke))!.PermissionDecision);
+        selected.Remove("view");
+        Assert.Equal("deny", (await config.Hooks.OnPreToolUse(input, invoke))!.PermissionDecision);
+        selected.Add("view");
+        runtime.SetMode(ApprovalMode.AskEveryTime);
+        var cancelled = config.Hooks.OnPreToolUse(input, invoke);
+        Assert.Single(runtime.Snapshot.Approvals);
+        cancellation.Cancel();
+        Assert.Equal("deny", (await cancelled)!.PermissionDecision);
+        Assert.Equal("deny", (await config.Hooks.OnPreToolUse(input, invoke))!.PermissionDecision);
+    }
+
+    [Fact]
+    public void McpConfigurationAllowsJsonCommentsAndTrailingCommas()
+    {
+        var path = System.IO.Path.GetTempFileName();
+        try
+        {
+            System.IO.File.WriteAllText(path, "{ // VS Code configuration\n\"servers\": {\"test\": {\"command\": \"test\",},},}");
+            Assert.Single(ToolConfiguration.Load(path));
+        }
+        finally { System.IO.File.Delete(path); }
+    }
+
     [Theory]
     [InlineData(Architecture.X64, "win-x64")]
     [InlineData(Architecture.Arm64, "win-arm64")]
@@ -327,6 +755,43 @@ public sealed class ApprovalTests
         Assert.Equal("C:\\temp", start.Environment["COPILOT_HOME"]);
         Assert.Equal(Environment.GetEnvironmentVariable("SystemRoot"), start.Environment["SystemRoot"]);
         foreach (var name in new[] { "COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN" }) Assert.False(start.Environment.ContainsKey(name));
+    }
+
+    [Fact]
+    public void AccountSignInFindsInstalledCliOnlyInAbsoluteSearchDirectories()
+    {
+        var directory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "copilot lookup & test " + Guid.NewGuid().ToString("N"));
+        System.IO.Directory.CreateDirectory(directory);
+        try
+        {
+            var method = typeof(WinDbgChatView.ChatPane).GetMethod("FindInstalledCommand",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+            string[] names = ["copilot.exe", "copilot.cmd"];
+            Assert.Null(method.Invoke(null, [";.;relative;", names]));
+            Assert.Null(method.Invoke(null, [directory, names]));
+            var script = System.IO.Path.Combine(directory, "copilot.cmd");
+            System.IO.File.WriteAllText(script, "@exit /b 0");
+            Assert.Equal(script, method.Invoke(null, [$";.;\"{directory}\";", names]));
+            var executable = System.IO.Path.Combine(directory, "copilot.exe");
+            System.IO.File.WriteAllText(executable, "not executed");
+            Assert.Equal(executable, method.Invoke(null, [directory, names]));
+            Assert.Null(method.Invoke(null, [directory, new[] { "winget.exe" }]));
+        }
+        finally { System.IO.Directory.Delete(directory, true); }
+    }
+
+    [Fact]
+    public void AccountSignInInstallerUsesOfficialWingetPackageWithoutElevationOrAutoConsent()
+    {
+        var method = typeof(WinDbgChatView.ChatPane).GetMethod("CreateCopilotInstallStartInfo",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+        var path = "C:\\Program Files\\WindowsApps\\winget.exe";
+        var start = Assert.IsType<System.Diagnostics.ProcessStartInfo>(method.Invoke(null, [path]));
+        Assert.Equal(path, start.FileName);
+        Assert.True(start.UseShellExecute);
+        Assert.Empty(start.Verb);
+        Assert.False(start.CreateNoWindow);
+        Assert.Equal(new[] { "install", "--id", "GitHub.Copilot", "--exact", "--source", "winget", "--scope", "user" }, start.ArgumentList);
     }
 
     [Theory]

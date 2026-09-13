@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "GitHub.Copilot.SDK": {
+        "type": "Transitive",
+        "resolved": "1.0.13",
+        "contentHash": "FkMlMloT9MiDPKSEpul/7TXy+bLwx+ck5H91vyLYNTLePre5smc/1DkoKtBzRdx/EbgT1zqeZ3FSFt9/2w3Syw==",
+        "dependencies": {
+          "Microsoft.Extensions.AI.Abstractions": "10.2.0"
+        }
+      },
+      "Microsoft.Extensions.AI.Abstractions": {
+        "type": "Transitive",
+        "resolved": "10.2.0",
+        "contentHash": "ONGlIBht0ygEdKc0bCt9XWUiq19/460dAu7fCKzPM34OFJSMQIohEDTJwjCJ8vVp8znNakloc9xFF9+R/eDCYQ=="
+      },
+      "chatcore": {
+        "type": "Project",
+        "dependencies": {
+          "GitHub.Copilot.SDK": "[1.0.13, )",
+          "WinDbgCopilot.Contracts": "[1.0.0, )"
+        }
+      },
+      "WinDbgCopilot.Contracts": {
+        "type": "Project"
+      }
+    }
+  }
+}
