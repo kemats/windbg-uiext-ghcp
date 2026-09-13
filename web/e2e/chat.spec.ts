@@ -205,9 +205,12 @@ test('startup connects once and header actions stay right aligned through retry'
     const header = (await page.locator('.topbar').boundingBox())!
     const newBounds = (await newChat.boundingBox())!
     const historyBounds = (await history.boundingBox())!
-    const padding = await page.locator('.topbar').evaluate(element => parseFloat(getComputedStyle(element).paddingRight))
+    const { padding, gap } = await page.locator('.topbar').evaluate(element => {
+      const style = getComputedStyle(element)
+      return { padding: parseFloat(style.paddingRight), gap: parseFloat(style.columnGap) }
+    })
     expect(header.x + header.width - newBounds.x - newBounds.width).toBeCloseTo(padding, 0)
-    expect(newBounds.x - historyBounds.x - historyBounds.width).toBeCloseTo(8, 0)
+    expect(newBounds.x - historyBounds.x - historyBounds.width).toBeCloseTo(gap, 0)
     expect(historyBounds.y).toBe(newBounds.y)
     return newBounds.x
   }
