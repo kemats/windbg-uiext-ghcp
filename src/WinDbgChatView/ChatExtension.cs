@@ -3,7 +3,9 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using Contracts;
 using DbgX.Interfaces;
+using DbgX.Interfaces.Listeners;
 using DbgX.Interfaces.Services;
 using DbgX.Interfaces.UI;
 
@@ -19,12 +21,16 @@ public sealed class ChatExtension : IDbgToolWindow
     [Import] public IDbgOutputEvents Output { get; set; } = null!;
     [Import] public IDbgTargetState Target { get; set; } = null!;
     [Import] public IDbgThemeService Theme { get; set; } = null!;
+    [Import] public IDbgReporter Reporter { get; set; } = null!;
     private ToolWindowView? _pane;
     private UiAssemblyLoadContext? _loadContext;
 
     public FrameworkElement GetToolWindowView(object parameter)
     {
         if (_pane is not null) return _pane;
+        IChatLogSink log = Reporter is null
+            ? NullChatLogSink.Instance
+            : new DbgReporterLogSink(Reporter, DbgReporterLogSink.ReadMinimumLevel());
         try
         {
             var root = Path.GetDirectoryName(typeof(ChatExtension).Assembly.Location)!;
@@ -32,12 +38,13 @@ public sealed class ChatExtension : IDbgToolWindow
             _loadContext ??= new UiAssemblyLoadContext(path);
             var assembly = _loadContext.LoadFromAssemblyPath(path);
             var content = (FrameworkElement)Activator.CreateInstance(assembly.GetType("WinDbgChatView.ChatPane", true)!,
-                EngineContext, Console, Output, Target, Theme)!;
+                EngineContext, Console, Output, Target, Theme, log)!;
             _pane = CreateHostView(content);
             return _pane;
         }
         catch (Exception exception)
         {
+            log.Log(ChatLogLevel.Error, nameof(ChatExtension), "Chat pane creation failed", exception);
             return CreateHostView(new TextBlock { Text = exception.GetBaseException().Message, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(12) });
         }
     }
@@ -53,6 +60,39 @@ public sealed class ChatExtension : IDbgToolWindow
         ToolWindowView.SetTabTitle(view, new ToolWindowTitle("Copilot Chat"));
         ToolWindowView.SetIsWindowPersisted(view, true);
         return view;
+    }
+}
+
+internal sealed class NullChatLogSink : IChatLogSink
+{
+    internal static NullChatLogSink Instance { get; } = new();
+    public ChatLogLevel MinimumLevel => ChatLogLevel.None;
+    public void Log(ChatLogLevel level, string category, string message, Exception? exception = null) { }
+}
+
+internal sealed class DbgReporterLogSink(IDbgReporter reporter, ChatLogLevel minimumLevel) : IChatLogSink
+{
+    public ChatLogLevel MinimumLevel { get; } = minimumLevel;
+
+    public void Log(ChatLogLevel level, string category, string message, Exception? exception = null)
+    {
+        if (level < MinimumLevel || MinimumLevel == ChatLogLevel.None) return;
+        var text = $"[WinDbgCopilotChat] [{category}] {message}";
+        if (level >= ChatLogLevel.Error)
+        {
+            if (exception is null) reporter.Error(false, text);
+            else reporter.Error(false, exception, text);
+        }
+        else if (level >= ChatLogLevel.Warning) reporter.Warning(text);
+        else reporter.Info(text);
+    }
+
+    internal static ChatLogLevel ReadMinimumLevel()
+    {
+        var value = Environment.GetEnvironmentVariable("WINDBG_COPILOT_LOG_LEVEL");
+        return Enum.TryParse<ChatLogLevel>(value, true, out var level) && Enum.IsDefined(level)
+            ? level
+            : ChatLogLevel.Information;
     }
 }
 

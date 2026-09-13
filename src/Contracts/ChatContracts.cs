@@ -1,6 +1,14 @@
 namespace Contracts;
 
 public enum ApprovalMode { AskEveryTime, ApproveAll }
+public enum ChatLogLevel { Trace, Debug, Information, Warning, Error, Critical, None }
+
+public interface IChatLogSink
+{
+    ChatLogLevel MinimumLevel { get; }
+    void Log(ChatLogLevel level, string category, string message, Exception? exception = null);
+}
+
 public sealed record TargetInfo(bool Available);
 public sealed record ChatMessage(string Id, string Role, string Text, bool Complete,
     string? TurnId = null, DateTimeOffset? Timestamp = null, string? Model = null, AttachmentInfo[]? Attachments = null,

@@ -145,6 +145,28 @@ public sealed class ApprovalTests
         Assert.Empty(runtime.Snapshot.Messages);
     }
 
+    [Fact]
+    public async Task McpStatusTransitionsAreLoggedWithoutServerConfigurationValues()
+    {
+        var log = new RecordingLogSink();
+        await using var runtime = new ChatRuntime(log);
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var definitions = (Dictionary<string, GitHub.Copilot.McpServerConfig>)typeof(ChatRuntime).GetField("_mcpDefinitions", flags)!.GetValue(runtime)!;
+        definitions["server"] = new GitHub.Copilot.McpHttpServerConfig
+        {
+            Url = "https://secret.example/mcp",
+            Headers = new Dictionary<string, string> { ["Authorization"] = "Bearer secret" }
+        };
+        ((HashSet<string>)typeof(ChatRuntime).GetField("_enabledServers", flags)!.GetValue(runtime)!).Add("server");
+        typeof(ChatRuntime).GetMethod("ResetMcpSessionState", flags)!.Invoke(runtime, null);
+        typeof(ChatRuntime).GetMethod("UpdateMcpStatus", flags)!.Invoke(runtime, ["server", "needs-auth"]);
+
+        Assert.Contains(log.Entries, entry => entry.Level == ChatLogLevel.Information
+            && entry.Message.Contains("server status changed from pending to needs-auth", StringComparison.Ordinal));
+        Assert.DoesNotContain(log.Entries, entry => entry.Message.Contains("secret.example", StringComparison.Ordinal)
+            || entry.Message.Contains("Bearer secret", StringComparison.Ordinal));
+    }
+
     [Theory]
     [InlineData("needs-auth", true, true, true)]
     [InlineData("connected", true, true, false)]
@@ -858,6 +880,25 @@ public sealed class ApprovalTests
     }
 
     [Fact]
+    public void DbgReporterSinkHonorsLevelAndRoutesSeverity()
+    {
+        var reporter = new RecordingReporter();
+        var type = typeof(WinDbgChatView.ChatExtension).Assembly.GetType("WinDbgChatView.DbgReporterLogSink", true)!;
+        var sink = Assert.IsAssignableFrom<IChatLogSink>(Activator.CreateInstance(type,
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic,
+            null, [reporter, ChatLogLevel.Warning], null));
+
+        sink.Log(ChatLogLevel.Information, "test", "ignored");
+        sink.Log(ChatLogLevel.Warning, "test", "warning");
+        var failure = new InvalidOperationException("failure");
+        sink.Log(ChatLogLevel.Error, "test", "error", failure);
+
+        Assert.Empty(reporter.Information);
+        Assert.Single(reporter.Warnings, "[WinDbgCopilotChat] [test] warning");
+        Assert.Single(reporter.Errors, item => item.Message == "[WinDbgCopilotChat] [test] error" && item.Exception == failure);
+    }
+
+    [Fact]
     public void MissingUiStillReturnsValidDockingContent()
     {
         Exception? failure = null;
@@ -1040,12 +1081,31 @@ public sealed class ApprovalTests
         var path = typeof(ChatRuntime).Assembly.Location;
         var context = new WinDbgChatView.CopilotAssemblyLoadContext(path);
         var assembly = context.LoadFromAssemblyPath(path);
-        var instance = Activator.CreateInstance(assembly.GetType("ChatCore.ChatRuntime", true)!);
+        var instance = Activator.CreateInstance(assembly.GetType("ChatCore.ChatRuntime", true)!, new RecordingLogSink());
         var runtime = Assert.IsAssignableFrom<IChatRuntime>(instance);
         Assert.NotSame(typeof(ChatRuntime).Assembly, runtime.GetType().Assembly);
         Assert.Same(context, System.Runtime.Loader.AssemblyLoadContext.GetLoadContext(runtime.GetType().Assembly));
         Assert.Equal(ApprovalMode.AskEveryTime, runtime.Snapshot.Mode);
         Assert.False(runtime.ResolveApproval("stale-session", "forged", true));
         await runtime.DisposeAsync();
+    }
+
+    private sealed class RecordingLogSink : IChatLogSink
+    {
+        public List<(ChatLogLevel Level, string Category, string Message, Exception? Exception)> Entries { get; } = [];
+        public ChatLogLevel MinimumLevel => ChatLogLevel.Debug;
+        public void Log(ChatLogLevel level, string category, string message, Exception? exception = null) =>
+            Entries.Add((level, category, message, exception));
+    }
+
+    private sealed class RecordingReporter : DbgX.Interfaces.Listeners.IDbgReporter
+    {
+        public List<string> Information { get; } = [];
+        public List<string> Warnings { get; } = [];
+        public List<(string Message, Exception? Exception)> Errors { get; } = [];
+        public void Info(string message) => Information.Add(message);
+        public void Warning(string message) => Warnings.Add(message);
+        public void Error(bool isFatal, string message) => Errors.Add((message, null));
+        public void Error(bool isFatal, Exception exception, string message) => Errors.Add((message, exception));
     }
 }

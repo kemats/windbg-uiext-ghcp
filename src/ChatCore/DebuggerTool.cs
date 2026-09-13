@@ -3,7 +3,7 @@ using Contracts;
 namespace ChatCore;
 
 public sealed class DebuggerTool(IDebuggerAdapter debugger, ApprovalGate approvals, Action<string>? showOutput = null,
-    Func<ApprovalMode>? getMode = null)
+    Func<ApprovalMode>? getMode = null, Action<Exception>? logFailure = null)
 {
     public async Task<string> ExecuteAsync(string command, TargetInfo target, ApprovalMode mode, CancellationToken token)
     {
@@ -17,7 +17,11 @@ public sealed class DebuggerTool(IDebuggerAdapter debugger, ApprovalGate approva
         string output;
         try { output = await debugger.ExecuteAsync(command, target, token); }
         catch (OperationCanceledException) { throw; }
-        catch { return "Debugger command failed. Inspect the WinDbg command window locally for details."; }
+        catch (Exception exception)
+        {
+            logFailure?.Invoke(exception);
+            return "Debugger command failed. Inspect the WinDbg command window locally for details.";
+        }
         token.ThrowIfCancellationRequested();
         showOutput?.Invoke(output);
         if ((getMode?.Invoke() ?? mode) == ApprovalMode.AskEveryTime && !await approvals.RequestAsync("share", output, token)) return "User withheld debugger output.";

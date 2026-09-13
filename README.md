@@ -19,6 +19,12 @@ The project's original source is licensed under the [MIT License](LICENSE). Depe
 - WebView2 Evergreen Runtime installed.
 - GitHub Copilot access and CLI authentication. Credentials stay in the CLI, never in the JavaScript bridge.
 
+## Logging
+
+The extension, its chat runtime, and GitHub Copilot SDK logs are routed to WinDbg through the MEF-provided `IDbgReporter`. The default minimum level is `Information`. Set the `WINDBG_COPILOT_LOG_LEVEL` environment variable before starting WinDbg to one of `Trace`, `Debug`, `Information`, `Warning`, `Error`, `Critical`, or `None`; restart WinDbg after changing it. Copilot SDK levels use the nearest equivalent threshold. Because `IDbgReporter` exposes three severities, extension `Trace`, `Debug`, and `Information` entries appear as informational WinDbg diagnostics, while `Critical` appears as an error.
+
+Use `Debug` when troubleshooting MCP. It records configuration source and server counts, status transitions, SDK initialization and metadata counts, per-server tool counts, bounded reconnect attempts, allowlist restoration, automatic refresh scheduling, session recreation/resumption, OAuth initiation and whether browser authorization is required. It does not record MCP commands, environment values, headers, credentials, authorization URLs, tool arguments, or tool results.
+
 ## Build requirements
 
 - PowerShell 7.4+.

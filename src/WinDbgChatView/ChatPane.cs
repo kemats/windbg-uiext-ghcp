@@ -23,6 +23,7 @@ public sealed class ChatPane : Grid
     };
     private readonly DebuggerAdapter _debugger;
     private readonly IDbgThemeService _theme;
+    private readonly IChatLogSink _log;
     private readonly WebView2 _browser = new();
     private readonly HashSet<string> _seen = [];
     private readonly Queue<string> _seenOrder = [];
@@ -35,10 +36,11 @@ public sealed class ChatPane : Grid
     private string? _lastTheme;
 
     public ChatPane(IDbgEngineSynchronizationContextSource engineContext, IDbgConsole console,
-        IDbgOutputEvents output, IDbgTargetState target, IDbgThemeService theme)
+        IDbgOutputEvents output, IDbgTargetState target, IDbgThemeService theme, IChatLogSink log)
     {
         _debugger = new DebuggerAdapter(engineContext, console, output, target);
         _theme = theme;
+        _log = log;
         Children.Add(_browser);
         Loaded += OnLoaded;
         _themeTimer = new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Background,
@@ -46,7 +48,8 @@ public sealed class ChatPane : Grid
         Unloaded += async (_, _) =>
         {
             _themeTimer.Stop();
-            try { if (_runtime is not null) await _runtime.CancelAsync(); } catch { }
+            try { if (_runtime is not null) await _runtime.CancelAsync(); }
+            catch (Exception exception) { _log.Log(ChatLogLevel.Debug, nameof(ChatPane), "Cancellation during unload failed", exception); }
         };
         Application.Current.Exit += async (_, _) =>
         {
@@ -93,6 +96,7 @@ public sealed class ChatPane : Grid
         }
         catch (Exception exception)
         {
+            _log.Log(ChatLogLevel.Error, nameof(ChatPane), "WebView initialization failed", exception);
             Children.Clear();
             Children.Add(new TextBlock { Text = exception.Message, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(12) });
         }
@@ -202,7 +206,11 @@ public sealed class ChatPane : Grid
                 default: throw new InvalidOperationException("Unsupported message type.");
             }
         }
-        catch (Exception exception) { Post("error", new { message = exception.Message }); }
+        catch (Exception exception)
+        {
+            _log.Log(ChatLogLevel.Error, nameof(ChatPane), "Bridge request failed", exception);
+            Post("error", new { message = exception.Message });
+        }
     }
 
     internal static System.Diagnostics.ProcessStartInfo CreateMcpAuthenticationStartInfo(string url)
@@ -336,14 +344,15 @@ public sealed class ChatPane : Grid
             var path = Path.GetFullPath(Path.Combine(root, "..", "core", "ChatCore.dll"));
             _loadContext ??= new CopilotAssemblyLoadContext(path);
             var assembly = _loadContext.LoadFromAssemblyPath(path);
-            runtime = (IChatRuntime)Activator.CreateInstance(assembly.GetType("ChatCore.ChatRuntime", true)!)!;
+            runtime = (IChatRuntime)Activator.CreateInstance(assembly.GetType("ChatCore.ChatRuntime", true)!, _log)!;
             await runtime.InitializeAsync(_debugger);
             _runtime = runtime;
             runtime.Changed += SendSnapshot;
             SendSnapshot(runtime.Snapshot);
         }
-        catch
+        catch (Exception exception)
         {
+            _log.Log(ChatLogLevel.Error, nameof(ChatPane), "Copilot connection failed", exception);
             if (runtime is not null)
             {
                 runtime.Changed -= SendSnapshot;

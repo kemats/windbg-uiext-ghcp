@@ -2,6 +2,7 @@ using Contracts;
 using GitHub.Copilot;
 using GitHub.Copilot.Rpc;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using System.Text.Json;
 using ChatMessage = Contracts.ChatMessage;
 
@@ -12,6 +13,8 @@ public sealed partial class ChatRuntime : IChatRuntime
     private readonly object _sync = new();
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
     private readonly ApprovalGate _approvals = new();
+    private readonly IChatLogSink _logSink;
+    private readonly ILogger _logger;
     private readonly List<ChatMessage> _messages = [];
     private readonly UsageTracker _usage = new();
     private readonly List<Task<string>> _toolTasks = [];
@@ -48,7 +51,13 @@ public sealed partial class ChatRuntime : IChatRuntime
         }
     }
 
-    public ChatRuntime() => _approvals.Changed += OnApprovalsChanged;
+    public ChatRuntime() : this(NullChatLogSink.Instance) { }
+    public ChatRuntime(IChatLogSink logSink)
+    {
+        _logSink = logSink;
+        _logger = new ChatLogger(logSink, nameof(ChatRuntime));
+        _approvals.Changed += OnApprovalsChanged;
+    }
     private void OnApprovalsChanged()
     {
         bool automatic;
@@ -74,10 +83,13 @@ public sealed partial class ChatRuntime : IChatRuntime
         _client = new CopilotClient(new CopilotClientOptions
         {
             UseLoggedInUser = true, BaseDirectory = directory, WorkingDirectory = directory,
+            Logger = new ChatLogger(_logSink, "GitHub.Copilot.SDK"),
+            LogLevel = ChatLogger.ToCopilotLevel(_logSink.MinimumLevel),
             Environment = CreateCliEnvironment(),
             Connection = RuntimeConnection.ForStdio(
                 path: Path.Combine(RuntimeAssets.NativeDirectory(Path.GetDirectoryName(typeof(ChatRuntime).Assembly.Location)!), "copilot.exe"))
         });
+        _logger.LogInformation("Starting Copilot SDK client");
         await _client.StartAsync();
         var auth = await _client.GetAuthStatusAsync();
         lock (_sync) _account = new(auth.Login, auth.Host, auth.IsAuthenticated);
@@ -208,7 +220,10 @@ public sealed partial class ChatRuntime : IChatRuntime
             }
         }
         catch (Exception failure) when (failure is IOException or UnauthorizedAccessException or JsonException)
-        { lock (_sync) _error = "Could not save session history: " + failure.Message; }
+        {
+            _logger.LogWarning(failure, "Could not save session history");
+            lock (_sync) _error = "Could not save session history: " + failure.Message;
+        }
     }
 
     public async Task RenameAsync(string sessionId, string title)
@@ -326,8 +341,15 @@ public sealed partial class ChatRuntime : IChatRuntime
             _target = await _debugger!.GetTargetAsync(cancellationToken);
             await session.SendAndWaitAsync(message, Timeout.InfiniteTimeSpan, cancellationToken);
         }
-        catch (OperationCanceledException) { }
-        catch (Exception exception) { lock (_sync) _error = exception.Message; }
+        catch (OperationCanceledException)
+        {
+            _logger.LogDebug("Copilot turn was cancelled");
+        }
+        catch (Exception exception)
+        {
+            _logger.LogError(exception, "Copilot turn failed");
+            lock (_sync) _error = exception.Message;
+        }
         finally
         {
             var cancelled = cancellationToken.IsCancellationRequested;
@@ -336,7 +358,8 @@ public sealed partial class ChatRuntime : IChatRuntime
             Task<string>[] pending;
             lock (_sync) pending = _toolTasks.ToArray();
             // SDK turn completion does not prove that an already-started debugger operation has returned.
-            try { await Task.WhenAll(pending); } catch { }
+            try { await Task.WhenAll(pending); }
+            catch (Exception exception) { _logger.LogDebug(exception, "A pending tool operation ended with an error"); }
             lock (_sync)
             {
                 _busy = false;
@@ -380,8 +403,9 @@ public sealed partial class ChatRuntime : IChatRuntime
             lock (_sync) CompleteTool(callId, "Cancelled", "Interrupted");
             throw;
         }
-        catch
+        catch (Exception exception)
         {
+            _logger.LogError(exception, "Tool invocation {ToolCallId} failed", callId);
             lock (_sync) CompleteTool(callId, "Tool failed.", "Failed");
             throw;
         }
@@ -413,7 +437,8 @@ public sealed partial class ChatRuntime : IChatRuntime
         ApprovalMode mode;
         lock (_sync) mode = _mode;
         return await new DebuggerTool(_debugger!, _approvals, output => ShowToolOutput(callId, output, "debugger_command: " + command),
-            () => { lock (_sync) return _mode; }).ExecuteAsync(command, _target, mode, linked.Token);
+            () => { lock (_sync) return _mode; }, exception => _logger.LogError(exception, "Debugger command failed"))
+            .ExecuteAsync(command, _target, mode, linked.Token);
     }
 
     private Task<string> GetTargetDetailsAsync(ToolInvocation invocation, CancellationToken cancellationToken) =>
@@ -455,8 +480,15 @@ public sealed partial class ChatRuntime : IChatRuntime
             if (!target.Available) throw new InvalidOperationException("No stopped target is available.");
             await _debugger.ExecuteAsync(command, target, token);
         }
-        catch (OperationCanceledException) { }
-        catch (Exception failure) { lock (_sync) _error = failure.Message; }
+        catch (OperationCanceledException)
+        {
+            _logger.LogDebug("Local debugger command was cancelled");
+        }
+        catch (Exception failure)
+        {
+            _logger.LogError(failure, "Local debugger command failed");
+            lock (_sync) _error = failure.Message;
+        }
         finally
         {
             lock (_sync) { _busy = false; _status = token.IsCancellationRequested ? "Cancelled" : "Ready"; }
@@ -491,7 +523,10 @@ public sealed partial class ChatRuntime : IChatRuntime
                     AppendAssistant(delta.Data.MessageId, delta.Data.DeltaContent, false, null); break;
                 case AssistantMessageEvent answer:
                     AppendAssistant(answer.Data.MessageId, answer.Data.Content, true, answer.Data.Model); break;
-                case SessionErrorEvent error: _error = error.Data.Message; break;
+                case SessionErrorEvent error:
+                    _logger.LogError("Copilot session error: {Message}", error.Data.Message);
+                    _error = error.Data.Message;
+                    break;
                 case AssistantIntentEvent intent:
                     _status = "Analyzing";
                     AppendActivity("intent-" + message.Id, "thinking", "Thinking", intent.Data.Intent, true); break;
@@ -572,6 +607,7 @@ public sealed partial class ChatRuntime : IChatRuntime
 
     public async ValueTask DisposeAsync()
     {
+        _logger.LogInformation("Stopping Copilot chat runtime");
         Task? refresh;
         lock (_sync) { _disposed = true; refresh = _mcpRefreshTask; }
         if (refresh is not null) await refresh;
