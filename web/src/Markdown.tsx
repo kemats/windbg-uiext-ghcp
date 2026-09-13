@@ -7,12 +7,10 @@ import DOMPurify from 'dompurify'
 let renderQueue = Promise.resolve()
 function Diagram({ source, theme }: { source: string; theme: string }) {
   const id = useId().replace(/[^a-zA-Z0-9]/g, '')
-  const [svg, setSvg] = useState('')
-  const [error, setError] = useState(false)
+  const [result, setResult] = useState<{ source: string; theme: string; svg?: string; error?: boolean }>()
   useEffect(() => {
     let disposed = false
-    setSvg(''); setError(false)
-    if (source.length > 12_000) { setError(true); return }
+    if (source.length > 12_000) return
     renderQueue = renderQueue.then(async () => {
       if (disposed) return
       const container = document.createElement('div')
@@ -27,15 +25,15 @@ function Diagram({ source, theme }: { source: string; theme: string }) {
           maxTextSize: 12_000, maxEdges: 150, flowchart: { htmlLabels: false }, suppressErrorRendering: true })
         await mermaid.parse(source)
         const result = await mermaid.render('diagram' + id, source, container)
-        if (!disposed) setSvg(DOMPurify.sanitize(result.svg, { USE_PROFILES: { svg: true, svgFilters: true }, FORBID_TAGS: ['foreignObject', 'a', 'image'] }))
-      } catch { if (!disposed) setError(true) }
+        if (!disposed) setResult({ source, theme, svg: DOMPurify.sanitize(result.svg, { USE_PROFILES: { svg: true, svgFilters: true }, FORBID_TAGS: ['foreignObject', 'a', 'image'] }) })
+      } catch { if (!disposed) setResult({ source, theme, error: true }) }
       finally { container.remove() }
     })
     return () => { disposed = true }
   }, [source, theme, id])
-  if (error) return <pre><code>{source}</code></pre>
-  if (!svg) return <pre aria-label="Diagram source"><code>{source}</code></pre>
-  return <div className="diagram" aria-label="Mermaid diagram" dangerouslySetInnerHTML={{ __html: svg }} />
+  if (source.length > 12_000 || (result?.source === source && result.theme === theme && result.error)) return <pre><code>{source}</code></pre>
+  if (result?.source !== source || result.theme !== theme || !result.svg) return <pre aria-label="Diagram source"><code>{source}</code></pre>
+  return <div className="diagram" aria-label="Mermaid diagram" dangerouslySetInnerHTML={{ __html: result.svg }} />
 }
 
 export function Markdown({ text, complete, theme, onLink }: { text: string; complete: boolean; theme: string; onLink?: (url: string) => void }) {
