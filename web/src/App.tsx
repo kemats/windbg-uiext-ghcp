@@ -33,6 +33,7 @@ export default function App() {
   const fileInput = useRef<HTMLInputElement>(null)
   const [error, setError] = useState<string | null>(null)
   const [connecting, setConnecting] = useState(false)
+  const [elevated, setElevated] = useState(false)
   const autoConnectRequested = useRef(false)
   const [theme, setTheme] = useState(matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
   const [copied, setCopied] = useState<string | null>(null)
@@ -66,6 +67,7 @@ export default function App() {
           }
           break
         }
+        case 'host': setElevated((event.payload as { elevated: boolean }).elevated); break
         case 'theme': setTheme((event.payload as { theme: string }).theme); break
         case 'error': setError((event.payload as { message: string }).message); setConnecting(false); setModelPending(false); setSessionPending(false); setSending(false); pendingSend.current = null; break
         case 'sessionChanged': setSessionPending(false); break
@@ -270,6 +272,7 @@ export default function App() {
       </button>)}
     </div>}
     {(error || state.error || speech.error) && <Banner key={state.sessionId + (error || state.error || speech.error)} text={error || state.error || speech.error || ''} kind="error" />}
+    {elevated && <Banner key="elevated-process" text="WinDbg is running as administrator. Copilot tools and commands also run with administrator privileges." kind="warning" />}
     {state.mode === 'ApproveAll' && <Banner key={state.sessionId + '-auto'} text="Approve all: commands and result sharing are automatically approved, including enabled built-in and MCP tools. Tools may access files, contact services or execute code." kind="warning" />}
     <footer>
       <form className="composer" onSubmit={event => { event.preventDefault(); submit() }} onPaste={event => {

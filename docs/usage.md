@@ -86,6 +86,7 @@ For OAuth-capable HTTP servers, enable the connection and use **Sign in**. The S
 
 ## Safety and data handling
 
+- Tools, commands, and child processes inherit WinDbg's privileges. When WinDbg is running as administrator, the chat pane shows a dismissible warning for the lifetime of that pane.
 - Debugger commands are not sandboxed. They can write files, load extensions, launch code, or use the network.
 - Cancellation prevents further tool work and output release, but does not forcibly interrupt a WinDbg command already running.
 - Review the active target before approving. Approval is tied to the displayed operation, not to a particular target.

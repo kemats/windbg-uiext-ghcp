@@ -1,5 +1,6 @@
 using System.IO;
 using System.Net;
+using System.Security.Principal;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Xml;
@@ -32,6 +33,7 @@ public sealed class ChatPane : Grid
     private readonly IChatLogSink _log;
     private readonly WebView2 _browser = new();
     private readonly BrowserReportHost _reportHost = new();
+    private readonly bool _isElevated = IsProcessElevated();
     private readonly HashSet<string> _seen = [];
     private readonly Queue<string> _seenOrder = [];
     private readonly DispatcherTimer _themeTimer;
@@ -128,6 +130,7 @@ public sealed class ChatPane : Grid
             if (request.Type == "ready")
             {
                 SendTheme(true);
+                Post("host", new { elevated = _isElevated });
                 if (_runtime is not null) SendSnapshot(_runtime.Snapshot);
                 else Post("disconnected", new { message = "Sign in with Copilot CLI, then connect." });
                 return;
@@ -492,7 +495,17 @@ public sealed class ChatPane : Grid
     private void SendSnapshot(ChatSnapshot snapshot)
     {
         if (!Dispatcher.CheckAccess()) { Dispatcher.BeginInvoke(() => SendSnapshot(snapshot)); return; }
-        if (_runtime is not null) Post("snapshot", _runtime.Snapshot);
+        if (_runtime is not null) Post("snapshot", snapshot);
+    }
+
+    internal static bool IsProcessElevated()
+    {
+        try
+        {
+            using var identity = WindowsIdentity.GetCurrent();
+            return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
+        }
+        catch (SystemException) { return false; }
     }
 
     private void SendTheme(bool force = false)

@@ -346,6 +346,16 @@ test('account switch starts a fresh Ask session and keeps the selected model', a
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
 })
 
+test('elevated host warning can be dismissed for the app lifetime', async ({ page }) => {
+  await page.goto('/?elevated=1')
+  const warning = page.locator('.warning').filter({ hasText: 'running as administrator' })
+  await expect(warning).toContainText('tools and commands also run with administrator privileges')
+  await warning.getByRole('button', { name: 'Dismiss notification' }).click()
+  await expect(warning).toHaveCount(0)
+  await page.getByRole('button', { name: 'New chat', exact: true }).click()
+  await expect(warning).toHaveCount(0)
+})
+
 test('history rename resume delete and automatic approvals', async ({ page }, testInfo) => {
   await page.goto('/')
   await page.getByRole('button', { name: 'Approve all', exact: true }).click()

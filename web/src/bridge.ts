@@ -54,6 +54,7 @@ function demoInfo(): SessionInfo {
   return { startedAt: new Date().toISOString(), nanoAiu: null, unreportedCostCalls: 0, currentTokens: null,
     tokenLimit: null, systemTokens: null, toolDefinitionsTokens: null, conversationTokens: null, messagesLength: null }
 }
+const demoElevated = new URLSearchParams(location.search).get('elevated') === '1'
 let mock: Snapshot = { ...initial, model: 'auto', sessionId: crypto.randomUUID(), status: 'Ready', target: { available: true }, models: [
   { id: 'demo', name: 'Demo model', contextTokens: 8000, maxPromptTokens: 6000, vision: true, reasoningEfforts: ['low', 'medium', 'high'], defaultReasoningEffort: 'medium', prices: { batchSize: 1000, input: 0.1, output: 0.4, cacheRead: 0.01, cacheWrite: 0 } },
   { id: 'demo-text', name: 'Demo text model', contextTokens: 16000, vision: false },
@@ -108,7 +109,10 @@ function finish(text: string) {
 }
 function mockRequest(request: Request) {
   switch (request.type) {
-    case 'ready': case 'connect': remember(); emit(); break
+    case 'ready':
+      listeners.forEach(listener => listener({ version: 1, sequence: ++sequence, type: 'host', payload: { elevated: demoElevated } }))
+      remember(); emit(); break
+    case 'connect': remember(); emit(); break
     case 'signIn':
       remember()
       mock = { ...mock, sessionId: crypto.randomUUID(), sessionTitle: 'New chat', busy: false, status: 'Ready', mode: 'AskEveryTime', messages: [], approvals: [], info: demoInfo(), turns: [], account: { login: 'other-demo-user', host: 'github.com', authenticated: true } }
