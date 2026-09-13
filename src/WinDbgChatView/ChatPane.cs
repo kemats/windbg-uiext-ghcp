@@ -1,12 +1,18 @@
 using System.IO;
+using System.Net;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Xml;
+using System.Xml.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
 using Contracts;
 using DbgX.Interfaces;
 using DbgX.Interfaces.Services;
+using Markdig;
+using Markdig.Syntax;
+using Markdig.Syntax.Inlines;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
 
@@ -25,6 +31,7 @@ public sealed class ChatPane : Grid
     private readonly IDbgThemeService _theme;
     private readonly IChatLogSink _log;
     private readonly WebView2 _browser = new();
+    private readonly BrowserReportHost _reportHost = new();
     private readonly HashSet<string> _seen = [];
     private readonly Queue<string> _seenOrder = [];
     private readonly DispatcherTimer _themeTimer;
@@ -53,6 +60,7 @@ public sealed class ChatPane : Grid
         };
         Application.Current.Exit += async (_, _) =>
         {
+            _reportHost.Dispose();
             _browser.Dispose();
             if (_runtime is not null) await _runtime.DisposeAsync();
         };
@@ -104,7 +112,7 @@ public sealed class ChatPane : Grid
 
     private sealed record BridgeRequest(int Version, string Type, string RequestId, string? SessionId,
         string? Text, string? Model, string? Mode, string? ApprovalId, bool? Approved,
-        ChatAttachment[]? Attachments, string? HistoryId, string[]? Tools, string[]? Servers);
+        ChatAttachment[]? Attachments, string? HistoryId, string[]? Tools, string[]? Servers, string[]? Diagrams);
 
     private async void OnMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs args)
     {
@@ -148,6 +156,16 @@ public sealed class ChatPane : Grid
                 case "rename": await runtime.RenameAsync(request.HistoryId ?? "", request.Text ?? ""); break;
                 case "delete": await runtime.DeleteAsync(request.HistoryId ?? ""); break;
                 case "command": await runtime.RunCommandAsync(request.Text ?? ""); break;
+                case "openReport":
+                case "openReportReader":
+                    var readerMode = request.Type == "openReportReader";
+                    var reportHtml = CreateReportHtml(request.Text ?? "", request.Diagrams, readerMode);
+                    var reportStart = readerMode
+                        ? _reportHost.CreateImmersiveReaderStartInfo(reportHtml, FindEdgeExecutable()
+                            ?? throw new InvalidOperationException("Microsoft Edge is required to open Immersive Reader."))
+                        : _reportHost.CreateStartInfo(reportHtml);
+                    using (System.Diagnostics.Process.Start(reportStart)) { }
+                    break;
                 case "tools":
                     var servers = request.Servers ?? [];
                     var enabled = runtime.Snapshot.ToolSettings?.Servers.Where(server => server.Enabled).Select(server => server.Name).ToHashSet() ?? [];
@@ -221,6 +239,104 @@ public sealed class ChatPane : Grid
         return new System.Diagnostics.ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true };
     }
 
+    internal static string CreateReportHtml(string markdown, string[]? diagrams = null, bool readerMode = false)
+    {
+        if (string.IsNullOrWhiteSpace(markdown)) throw new ArgumentException("The response is empty.");
+        if (markdown.Length > 2 * 1024 * 1024) throw new ArgumentException("The response is too large to open as a report.");
+        var pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().DisableHtml().Build();
+        var document = Markdown.Parse(markdown, pipeline);
+        foreach (var link in document.Descendants<LinkInline>())
+        {
+            var url = link.Url;
+            if (url is null || url.StartsWith('#')) continue;
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme is not ("https" or "http")
+                || string.IsNullOrEmpty(uri.Host) || !string.IsNullOrEmpty(uri.UserInfo))
+                link.Url = null;
+        }
+        var content = Markdown.ToHtml(document, pipeline);
+        var mermaidBlocks = document.Descendants<FencedCodeBlock>()
+            .Where(block => string.Equals(block.Info, "mermaid", StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (diagrams is not null)
+        {
+            if (diagrams.Length > 16) throw new ArgumentException("The report contains too many diagrams.");
+            for (var index = 0; index < Math.Min(diagrams.Length, mermaidBlocks.Length); index++)
+            {
+                var source = mermaidBlocks[index].Lines.ToString().TrimEnd('\r', '\n');
+                var renderedBlock = Markdown.ToHtml($"```mermaid\n{source}\n```", pipeline);
+                var svg = ValidateReportSvg(diagrams[index]);
+                var encodedSvg = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(svg));
+                content = content.Replace(renderedBlock,
+                    $"<figure class=\"diagram\"><img src=\"data:image/svg+xml;base64,{encodedSvg}\" alt=\"Mermaid diagram\"></figure>\n",
+                    StringComparison.Ordinal);
+            }
+        }
+        var language = markdown.Any(character => character is >= '\u3040' and <= '\u30ff' or >= '\u3400' and <= '\u9fff') ? "ja" : "en";
+        if (readerMode) content = content.Replace("<pre><code", "<pre aria-hidden=\"true\"><code", StringComparison.Ordinal);
+        return $$"""
+            <!doctype html>
+            <html lang="{{language}}">
+            <head>
+              <meta charset="utf-8">
+              <meta name="viewport" content="width=device-width,initial-scale=1">
+              <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">
+              <title>Copilot response</title>
+              <style>
+                :root { color-scheme: light dark; font-family: Georgia, 'Yu Mincho', serif; }
+                body { margin: 0; background: Canvas; color: CanvasText; }
+                main { width: min(920px, calc(100% - 48px)); margin: 48px auto 96px; }
+                header { border-bottom: 1px solid GrayText; margin-bottom: 32px; padding-bottom: 16px; }
+                header h1 { margin: 0; font: 600 28px/1.2 'Segoe UI', 'Yu Gothic UI', sans-serif; }
+                time { color: GrayText; font: 14px/1.5 'Segoe UI', 'Yu Gothic UI', sans-serif; }
+                article { font-size: 20px; line-height: 1.65; }
+                article h1, article h2, article h3 { margin: 1.4em 0 .5em; line-height: 1.25; font-family: 'Segoe UI', 'Yu Gothic UI', sans-serif; }
+                article h1 { font-size: 1.7em; } article h2 { font-size: 1.4em; } article h3 { font-size: 1.18em; }
+                article p, article ul, article ol, article pre, article blockquote, article table { margin: 0 0 1em; }
+                article li + li { margin-top: .3em; }
+                article code { font: .85em/1.5 Consolas, monospace; }
+                article pre { overflow: auto; padding: 16px; border: 1px solid GrayText; border-radius: 4px; }
+                article table { width: 100%; border-collapse: collapse; font-family: 'Segoe UI', 'Yu Gothic UI', sans-serif; font-size: .9em; }
+                article th, article td { padding: 8px 10px; border: 1px solid GrayText; text-align: left; }
+                article blockquote { margin-left: 0; padding-left: 18px; border-left: 3px solid GrayText; }
+                article a { color: LinkText; }
+                article .diagram { margin: 1.5em 0; overflow-x: auto; }
+                article .diagram img { display: block; max-width: 100%; height: auto; margin: auto; }
+                @media (max-width: 600px) { main { width: min(100% - 28px, 920px); margin-top: 24px; } article { font-size: 18px; } }
+                @media print { main { width: auto; margin: 0; } header { margin-bottom: 20px; } }
+              </style>
+            </head>
+            <body><main><header><h1>Copilot response</h1><time>{{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss zzz}}</time></header><article id="immersive-reader-content" lang="{{language}}">{{content}}</article></main></body>
+            </html>
+            """;
+    }
+
+    private static string ValidateReportSvg(string svg)
+    {
+        if (string.IsNullOrWhiteSpace(svg) || svg.Length > 1024 * 1024) throw new ArgumentException("Invalid report diagram.");
+        using var reader = XmlReader.Create(new StringReader(svg), new XmlReaderSettings
+        {
+            DtdProcessing = DtdProcessing.Prohibit,
+            XmlResolver = null,
+            MaxCharactersInDocument = 1024 * 1024
+        });
+        var document = XDocument.Load(reader, LoadOptions.None);
+        var root = document.Root;
+        if (root is null || root.Name.LocalName != "svg" || root.Name.NamespaceName != "http://www.w3.org/2000/svg")
+            throw new ArgumentException("Invalid report diagram.");
+        var blockedElements = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "a", "foreignObject", "iframe", "image", "script", "use" };
+        foreach (var element in root.DescendantsAndSelf())
+        {
+            if (blockedElements.Contains(element.Name.LocalName)) throw new ArgumentException("Unsafe report diagram.");
+            foreach (var attribute in element.Attributes())
+            {
+                if (attribute.Name.LocalName.StartsWith("on", StringComparison.OrdinalIgnoreCase)
+                    || attribute.Name.LocalName is "href" or "src"
+                    || attribute.Value.Contains("javascript:", StringComparison.OrdinalIgnoreCase))
+                    throw new ArgumentException("Unsafe report diagram.");
+            }
+        }
+        return root.ToString(SaveOptions.DisableFormatting);
+    }
+
     internal static System.Diagnostics.ProcessStartInfo CreateMcpEditorStartInfo(string path)
     {
         path = Path.GetFullPath(path);
@@ -231,6 +347,16 @@ public sealed class ChatPane : Grid
             JsonSerializer.Serialize(file, new { servers = new Dictionary<string, object>() }, new JsonSerializerOptions { WriteIndented = true });
         }
         return new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true, Verb = "open" };
+    }
+
+    internal static string? FindEdgeExecutable(string? programFilesX86 = null, string? programFiles = null, string? localAppData = null)
+    {
+        programFilesX86 ??= Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+        programFiles ??= Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        localAppData ??= Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        return new[] { programFilesX86, programFiles, localAppData }
+            .Select(root => Path.Combine(root, "Microsoft", "Edge", "Application", "msedge.exe"))
+            .FirstOrDefault(File.Exists);
     }
 
     private async Task SignInAsync()

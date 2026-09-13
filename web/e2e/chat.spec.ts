@@ -411,7 +411,7 @@ test('published reasoning collapses on completion and supports speech and explic
       target: { available: true }, approvals: [], models: [], messages: [
         { id: 'reason', role: 'reasoning', title: 'Reasoning', text: 'Published reasoning from the test provider.', complete: false },
         { id: 'tool', role: 'tool', title: 'debugger_target', text: '{"Type":"UserDump","State":"Stopped"}', complete: true },
-        { id: 'answer', role: 'assistant', complete: true, text: '[Documentation](https://learn.microsoft.com/windows-hardware/drivers/debugger/)\n\n[Run stack](windbg-command:%6B)\n\n[Forbidden](file:///C:/secret)' },
+        { id: 'answer', role: 'assistant', complete: true, text: '[Documentation](https://learn.microsoft.com/windows-hardware/drivers/debugger/)\n\n[Run stack](windbg-command:%6B)\n\n[Forbidden](file:///C:/secret)\n\n```mermaid\ngraph TD; Report-->Browser\n```' },
       ] }
     const emit = () => handler?.({ data: { version: 1, sequence: ++sequence, type: 'snapshot', payload: structuredClone(snapshot) } })
     Object.assign(window, { featureTest: { requests, spoken, complete: () => { snapshot.busy = false; snapshot.status = 'Ready'; snapshot.messages[0].complete = true; emit() } } })
@@ -438,11 +438,22 @@ test('published reasoning collapses on completion and supports speech and explic
   await page.getByRole('region', { name: 'debugger_target', exact: true }).getByRole('button', { name: 'debugger_target Completed' }).click()
   await expect(page.getByRole('region', { name: 'debugger_target', exact: true })).toContainText('UserDump')
   await expect(page.getByRole('link', { name: 'Forbidden' })).toHaveCount(0)
+  await expect(page.locator('.message.assistant .diagram svg')).toBeVisible()
   await page.getByRole('link', { name: 'Documentation', exact: true }).click()
   await page.getByRole('link', { name: 'Run stack', exact: true }).click()
+  await page.getByRole('button', { name: 'Open response in browser', exact: true }).click()
+  await page.getByRole('button', { name: 'Open response in Immersive Reader', exact: true }).click()
   const requests = await page.evaluate('window.featureTest.requests')
   expect(requests.filter((request: { type: string }) => request.type === 'command')).toEqual([expect.objectContaining({ text: 'k', sessionId: 'session' })])
   expect(requests.filter((request: { type: string }) => request.type === 'openUrl')).toEqual([expect.objectContaining({ text: 'https://learn.microsoft.com/windows-hardware/drivers/debugger/' })])
+  expect(requests.filter((request: { type: string }) => request.type === 'openReport')).toEqual([expect.objectContaining({
+    text: expect.stringContaining('[Documentation](https://learn.microsoft.com/windows-hardware/drivers/debugger/)'), sessionId: 'session',
+    diagrams: [expect.stringContaining('<svg')],
+  })])
+  expect(requests.filter((request: { type: string }) => request.type === 'openReportReader')).toEqual([expect.objectContaining({
+    text: expect.stringContaining('[Documentation](https://learn.microsoft.com/windows-hardware/drivers/debugger/)'), sessionId: 'session',
+    diagrams: [expect.stringContaining('<svg')],
+  })])
   expect(requests.filter((request: { type: string }) => request.type === 'send')).toHaveLength(0)
   await page.screenshot({ path: testInfo.outputPath('activity-dark.png') })
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)

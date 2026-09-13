@@ -9,6 +9,7 @@
   <ItemGroup>
     <Compile Remove="ChatExtension.cs" />
     <ProjectReference Include="../Contracts/Contracts.csproj" />
+    <PackageReference Include="Markdig.Signed" Version="0.38.0" />
     <PackageReference Include="Microsoft.Debugging.Platform.DbgX" Version="20260320.1.0" ExcludeAssets="build;buildTransitive" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3856.49" />
   </ItemGroup>

@@ -1,5 +1,7 @@
 using ChatCore;
 using Contracts;
+using System.Net;
+using System.Net.Http;
 using System.Runtime.InteropServices;
 using Xunit;
 
@@ -263,6 +265,105 @@ public sealed class ApprovalTests
             var contents = System.IO.File.ReadAllText(path);
             method.Invoke(null, [path]);
             Assert.Equal(contents, System.IO.File.ReadAllText(path));
+        }
+        finally { if (System.IO.Directory.Exists(directory)) System.IO.Directory.Delete(directory, true); }
+    }
+
+    [Fact]
+    public void BrowserReportRendersSafeSemanticHtml()
+    {
+        var method = typeof(WinDbgChatView.ChatPane).GetMethod("CreateReportHtml",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+        var markdown = "# 結果\n\n**停止中**です。\n\n- First\n- Second\n\n```text\nk\n```\n\n```mermaid\ngraph TD; A-->B\n```\n\n[unsafe](javascript:alert(1))\n\n<script>alert('x')</script>";
+        const string diagram = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 20 10\"><text x=\"1\" y=\"8\">A</text></svg>";
+        var html = Assert.IsType<string>(method.Invoke(null, [markdown, new[] { diagram }, false]));
+        Assert.Contains("<html lang=\"ja\">", html);
+        Assert.Contains("<article id=\"immersive-reader-content\" lang=\"ja\">", html);
+        Assert.Contains("<h1", html);
+        Assert.Contains(">結果</h1>", html);
+        Assert.Contains("<strong>停止中</strong>", html);
+        Assert.Contains("<ul>", html);
+        Assert.Contains("<pre><code class=\"language-text\">k", html);
+        Assert.Contains("<figure class=\"diagram\"", html);
+        Assert.Contains("<img src=\"data:image/svg+xml;base64,", html);
+        Assert.Contains("alt=\"Mermaid diagram\"", html);
+        Assert.DoesNotContain("<svg", html);
+        var encodedStart = html.IndexOf("data:image/svg+xml;base64,", StringComparison.Ordinal) + "data:image/svg+xml;base64,".Length;
+        var encodedEnd = html.IndexOf('"', encodedStart);
+        var decodedDiagram = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(html[encodedStart..encodedEnd]));
+        Assert.Contains("<svg xmlns=\"http://www.w3.org/2000/svg\"", decodedDiagram);
+        Assert.Contains("viewBox=\"0 0 20 10\"", decodedDiagram);
+        Assert.DoesNotContain("language-mermaid", html);
+        Assert.DoesNotContain("<script>alert", html);
+        Assert.DoesNotContain("href=\"javascript:", html);
+        Assert.Contains("default-src 'none'", html);
+
+        var readerHtml = Assert.IsType<string>(method.Invoke(null, [markdown, new[] { diagram }, true]));
+        Assert.Contains("<pre aria-hidden=\"true\"><code class=\"language-text\">k", readerHtml);
+        Assert.DoesNotContain("class=\"code-image\"", readerHtml);
+        Assert.DoesNotContain("<pre aria-hidden=\"true\">", html);
+    }
+
+    [Fact]
+    public void BrowserReportRejectsActiveDiagramContent()
+    {
+        var method = typeof(WinDbgChatView.ChatPane).GetMethod("CreateReportHtml",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+        var failure = Assert.Throws<System.Reflection.TargetInvocationException>(() => method.Invoke(null,
+            ["```mermaid\ngraph TD; A-->B\n```", new[] { "<svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script></svg>" }, false]));
+        Assert.IsType<ArgumentException>(failure.InnerException);
+    }
+
+    [Fact]
+    public async Task BrowserReportHostServesOnlyUnguessableLoopbackUrls()
+    {
+        var hostType = typeof(WinDbgChatView.ChatPane).Assembly.GetType("WinDbgChatView.BrowserReportHost", true)!;
+        using var host = Assert.IsAssignableFrom<IDisposable>(Activator.CreateInstance(hostType, true));
+        var method = hostType.GetMethod("CreateStartInfo")!;
+        var start = Assert.IsType<System.Diagnostics.ProcessStartInfo>(method.Invoke(host, ["<!doctype html><title>report</title>"]));
+        var uri = new Uri(start.FileName);
+        Assert.Equal("http", uri.Scheme);
+        Assert.Equal("127.0.0.1", uri.Host);
+        Assert.Matches("^/[0-9a-f]{64}/report\\.html$", uri.AbsolutePath);
+        Assert.True(start.UseShellExecute);
+
+        var immersiveMethod = hostType.GetMethod("CreateImmersiveReaderStartInfo")!;
+        var immersive = Assert.IsType<System.Diagnostics.ProcessStartInfo>(immersiveMethod.Invoke(host, ["<p>reader</p>", @"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"]));
+        Assert.Equal(@"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe", immersive.FileName);
+        Assert.True(immersive.UseShellExecute);
+        Assert.Single(immersive.ArgumentList);
+        Assert.Matches("^read:http://127\\.0\\.0\\.1:[0-9]+/[0-9a-f]{64}/report\\.html$", immersive.ArgumentList[0]);
+
+        using var client = new HttpClient();
+        using var response = await client.GetAsync(uri);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("text/html", response.Content.Headers.ContentType!.MediaType);
+        Assert.Equal("utf-8", response.Content.Headers.ContentType.CharSet);
+        Assert.Contains("no-store", response.Headers.CacheControl!.ToString());
+        Assert.Equal("nosniff", response.Headers.GetValues("X-Content-Type-Options").Single());
+        Assert.Contains("default-src 'none'", response.Headers.GetValues("Content-Security-Policy").Single());
+        Assert.Contains("img-src data:", response.Headers.GetValues("Content-Security-Policy").Single());
+        Assert.Equal("<!doctype html><title>report</title>", await response.Content.ReadAsStringAsync());
+
+        using var invalidHost = new HttpRequestMessage(HttpMethod.Get, uri);
+        invalidHost.Headers.Host = $"localhost:{uri.Port}";
+        using var rejected = await client.SendAsync(invalidHost);
+        Assert.Equal(HttpStatusCode.BadRequest, rejected.StatusCode);
+    }
+
+    [Fact]
+    public void BrowserReportFindsEdgeInSupportedInstallRoots()
+    {
+        var directory = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "edge test " + Guid.NewGuid().ToString("N"));
+        var edge = System.IO.Path.Combine(directory, "Microsoft", "Edge", "Application", "msedge.exe");
+        try
+        {
+            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(edge)!);
+            System.IO.File.WriteAllText(edge, "");
+            var method = typeof(WinDbgChatView.ChatPane).GetMethod("FindEdgeExecutable",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+            var found = Assert.IsType<string>(method.Invoke(null, [directory + "-missing", directory, directory + "-also-missing"]));
+            Assert.Equal(edge, found);
         }
         finally { if (System.IO.Directory.Exists(directory)) System.IO.Directory.Delete(directory, true); }
     }

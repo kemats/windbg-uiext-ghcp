@@ -899,6 +899,7 @@
       "WinDbgCopilot.UI": {
         "type": "Project",
         "dependencies": {
+          "Markdig.Signed": "[0.38.0, )",
           "Microsoft.Debugging.Platform.DbgX": "[20260320.1.0, )",
           "Microsoft.Web.WebView2": "[1.0.3856.49, )",
           "WinDbgCopilot.Contracts": "[1.0.0, )"

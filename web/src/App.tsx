@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
-import { ArrowUp, Check, Copy, FileText, Github, History, Image, Info, LoaderCircle, LogIn, Paperclip, Plug, Plus, ShieldCheck, Square, Terminal, Volume2, X } from 'lucide-react'
+import { ArrowUp, BookOpen, Check, Copy, ExternalLink, FileText, Github, History, Image, Info, LoaderCircle, LogIn, Paperclip, Plug, Plus, ShieldCheck, Square, Terminal, Volume2, X } from 'lucide-react'
 import { demo, initial, send, subscribe } from './bridge'
 import type { Mode, Snapshot } from './bridge'
 import { Markdown } from './Markdown'
@@ -129,6 +129,11 @@ export default function App() {
     const y = event.clientY || bounds.bottom
     setVoiceMenu({ x: Math.max(8, Math.min(x, innerWidth - 288)), y: Math.max(8, Math.min(y, innerHeight - 328)) })
   }
+  function openReport(event: ReactMouseEvent<HTMLButtonElement>, text: string, immersiveReader = false) {
+    const diagrams = Array.from(event.currentTarget.closest('article')?.querySelectorAll('.diagram svg') || [])
+      .map(diagram => diagram.outerHTML)
+    request(immersiveReader ? 'openReportReader' : 'openReport', { text, diagrams })
+  }
   function submit() {
     if ((!draft.trim() && !attachments.length) || state.busy || connecting || sessionPending || modelPending || sending || reading.current || !state.sessionId) return
     if (attachments.some(file => file.mimeType.startsWith('image/')) && state.models.find(model => model.id === state.model)?.vision === false) {
@@ -235,6 +240,8 @@ export default function App() {
           </div>
           {message.complete && <div className="message-actions">
             <button className="icon" title={copied === message.id ? 'Copied' : 'Copy response'} aria-label="Copy response" onClick={() => void copy(message.id, message.text)}>{copied === message.id ? <Check size={14} /> : <Copy size={14} />}</button>
+            <button className="icon" title="Open response in browser" aria-label="Open response in browser" onClick={event => openReport(event, message.text)}><ExternalLink size={14} /></button>
+            <button className="icon" title="Open response in Immersive Reader" aria-label="Open response in Immersive Reader" onClick={event => openReport(event, message.text, true)}><BookOpen size={14} /></button>
             <button className="icon" disabled={!speech.configurable(message.text)}
               title={!speech.available(message.text) ? 'Right-click to choose a voice' : speech.playing === message.id ? 'Stop reading' : 'Read aloud (right-click to choose voice)'}
               aria-label={speech.playing === message.id ? 'Stop reading' : 'Read aloud'} onClick={() => speech.toggle(message.id, message.text)} onContextMenu={openVoiceMenu}>

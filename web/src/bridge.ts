@@ -37,6 +37,7 @@ export interface Request {
   attachments?: ChatAttachment[]
   historyId?: string
   tools?: string[]; servers?: string[]
+  diagrams?: string[]
 }
 interface WebView {
   postMessage(request: Request): void
@@ -138,6 +139,7 @@ function mockRequest(request: Request) {
     case 'command':
       mock.status = 'Ready'
       emit(); break
+    case 'openReport': case 'openReportReader': break
     case 'tools':
       if (mock.busy || !mock.toolSettings) return
       mock.toolSettings.servers = mock.toolSettings.servers.map(server => ({ ...server, enabled: !!request.servers?.includes(server.name), canAuthenticate: false, status: request.servers?.includes(server.name) ? 'connected' : 'disabled' }))

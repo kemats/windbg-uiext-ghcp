@@ -2,6 +2,12 @@
   "version": 1,
   "dependencies": {
     "net10.0-windows10.0.17763": {
+      "Markdig.Signed": {
+        "type": "Direct",
+        "requested": "[0.38.0, )",
+        "resolved": "0.38.0",
+        "contentHash": "zfi6kNm5QJnsCGm5a0hMG2qw8juYbOfsS4c1OuTcqkbYQUCdkam6d6Nt7nPIrbV4D+U7sHChidSQlg+ViiMPuw=="
+      },
       "Microsoft.Debugging.Platform.DbgX": {
         "type": "Direct",
         "requested": "[20260320.1.0, )",
@@ -50,11 +56,6 @@
         "dependencies": {
           "JsonPointer.Net": "5.0.0"
         }
-      },
-      "Markdig.Signed": {
-        "type": "Transitive",
-        "resolved": "0.38.0",
-        "contentHash": "zfi6kNm5QJnsCGm5a0hMG2qw8juYbOfsS4c1OuTcqkbYQUCdkam6d6Nt7nPIrbV4D+U7sHChidSQlg+ViiMPuw=="
       },
       "Microsoft.ApplicationInsights": {
         "type": "Transitive",
