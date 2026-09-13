@@ -12,7 +12,11 @@ export function readableText(markdown: string): string {
   return walk(tree).trim()
 }
 
-export function localVoice(voices: SpeechSynthesisVoice[], language: string) {
+export function preferredVoice(voices: SpeechSynthesisVoice[], language: string, voiceUri: string | null) {
+  if (voiceUri) {
+    const selected = voices.find(voice => voice.voiceURI === voiceUri)
+    if (selected) return selected
+  }
   return voices.find(voice => voice.localService && voice.lang.toLowerCase() === language.toLowerCase())
     ?? voices.find(voice => voice.localService && voice.lang.split('-')[0] === language.split('-')[0])
 }

@@ -775,11 +775,11 @@ test('native bridge rejects stale snapshots and does not render raw HTML or imag
   await expect(info).toHaveCount(0)
 })
 
-test('late local voices, replacement, stale callbacks and new-chat stop', async ({ page }) => {
+test('voice context menu selection, replacement, stale callbacks and new-chat stop', async ({ page }) => {
   await page.addInitScript(() => {
     let handler: ((event: { data: unknown }) => void) | undefined
     let sequence = 0
-    const voice = { localService: true, lang: 'en-US', name: 'Local test voice', default: false, voiceURI: 'local' }
+    const voice = { localService: false, lang: 'en-US', name: 'Online test voice', default: false, voiceURI: 'online' }
     const state = { voices: [] as unknown[], utterances: [] as { onend?: () => void; onerror?: () => void }[], cancellations: 0 }
     const synthesis = Object.assign(new EventTarget(), {
       getVoices: () => state.voices,
@@ -803,8 +803,14 @@ test('late local voices, replacement, stale callbacks and new-chat stop', async 
   await page.goto('/')
   await expect(page.getByRole('button', { name: 'Read aloud', exact: true }).first()).toBeDisabled()
   await page.evaluate('window.speechTest.enable()')
-  await page.getByRole('button', { name: 'Read aloud', exact: true }).first().click()
+  const firstRead = page.getByRole('button', { name: 'Read aloud', exact: true }).first()
+  await expect(firstRead).toBeEnabled()
+  await firstRead.click({ button: 'right' })
+  await page.getByRole('menuitemradio', { name: /Online test voice/ }).click()
+  await firstRead.click()
   expect(await page.evaluate('window.speechTest.state.utterances[0].text')).toBe('First answer.')
+  expect(await page.evaluate('window.speechTest.state.utterances[0].voice.voiceURI')).toBe('online')
+  expect(await page.evaluate('localStorage.getItem("speechVoice")')).toBe('online')
   await page.getByRole('button', { name: 'Read aloud', exact: true }).click()
   await page.evaluate('window.speechTest.state.utterances[0].onend()')
   await expect(page.getByRole('button', { name: 'Stop reading', exact: true })).toHaveCount(1)

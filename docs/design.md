@@ -10,7 +10,7 @@ This document describes the implemented extension, not a roadmap. Its evidence i
 | WinDbgChatView | WebView2 bridge, theme, authentication console, debugger adapter | Hidden host-member introspection or a second chat state machine |
 | ChatCore | SDK session lifecycle, approvals, tool activity, usage, history | WPF or DbgX types |
 | Contracts | Cross-context interfaces and versioned bridge DTOs | SDK or UI dependency types |
-| web | React rendering, composer, rich content and explicit local speech | Credentials or direct debugger access |
+| web | React rendering, composer, rich content and explicit speech playback | Credentials or direct debugger access |
 
 The bootstrap and shared contracts are the only root assemblies. UI/WebView2 and SDK dependencies live in separate directories and separate `AssemblyLoadContext` instances. Sharing contract, WPF and DbgX assemblies preserves type identity across the host boundary; loading a second copy of a contract would make otherwise identical-looking types incompatible. Tests check those identities and that bootstrap does not reference the UI/WebView2 assemblies. The contexts are non-collectible: disposing chat resources is not a promise to unload assemblies. Restart WinDbg after replacing binaries.
 
@@ -77,7 +77,7 @@ History includes local tool output even when sharing was denied, plus attachment
 
 Usage and model prices come from SDK telemetry. A model cost multiplier is not a credit charge; absent data stays unknown or partial. Displayed session totals are not an account billing statement. Late usage belongs to the session subtotal rather than inventing a completed-turn attribution.
 
-Speech uses explicitly selected voices advertised as `localService=true`, without remote fallback or autoplay. Playback identity guards reject late callbacks from prior utterances. Runtime-reported locality does not independently prove network behavior; mock tests cannot establish installed Japanese voice availability.
+Speech uses a matching local voice by default. Right-clicking a read-aloud button opens the runtime's voice list; selecting a voice stores its `voiceURI` and uses that exact voice until Automatic is selected or the voice becomes unavailable. Selecting a voice advertised as `localService=false` may send read-aloud text to the operating-system voice provider. Speech never autoplays, and playback identity guards reject late callbacks from prior utterances. Runtime-reported locality does not independently prove network behavior; mock tests cannot establish installed Japanese or online voice availability.
 
 ## Maintenance
 

@@ -18,15 +18,18 @@ export function ImagePreview({ file }: { file: AttachmentInfo }) {
   </>
 }
 
-export function Activity({ message, theme, available, playing, onRead, onCopy, onLink }: {
-  message: Message; theme: string; available: boolean; playing: boolean; onRead(): void; onCopy(): void; onLink(url: string): void
+export function Activity({ message, theme, available, configurable, playing, onRead, onVoiceMenu, onCopy, onLink }: {
+  message: Message; theme: string; available: boolean; configurable: boolean; playing: boolean; onRead(): void
+  onVoiceMenu(event: React.MouseEvent<HTMLButtonElement>): void; onCopy(): void; onLink(url: string): void
 }) {
   const [open, setOpen] = useState(!message.complete)
   return <section className="activity" aria-label={message.title || message.role}>
     <div className="activity-heading">
       <button className="activity-toggle" aria-expanded={open} onClick={() => setOpen(!open)}><ChevronDown size={14} className={open ? '' : 'collapsed'} />{message.role === 'tool' ? <Terminal size={15} data-activity-icon="tool" /> : <Brain size={15} data-activity-icon="reasoning" />}<span>{message.title || message.role}</span><small>{message.activityStatus || (message.complete ? 'Completed' : 'In progress')}</small></button>
       <button className="icon" title="Copy activity" aria-label="Copy activity" onClick={onCopy}><Copy size={14} /></button>
-      {message.role !== 'tool' && <button className="icon" disabled={!available} title={playing ? 'Stop reading' : 'Read activity aloud'} aria-label={playing ? 'Stop reading' : 'Read activity aloud'} onClick={onRead}>{playing ? <Square size={14} /> : <Volume2 size={14} />}</button>}
+      {message.role !== 'tool' && <button className="icon" disabled={!configurable}
+        title={!available ? 'Right-click to choose a voice' : playing ? 'Stop reading' : 'Read activity aloud (right-click to choose voice)'}
+        aria-label={playing ? 'Stop reading' : 'Read activity aloud'} onClick={onRead} onContextMenu={onVoiceMenu}>{playing ? <Square size={14} /> : <Volume2 size={14} />}</button>}
     </div>
     {open && <div className="activity-body message-body">{message.role === 'tool' ? <pre>{message.text}</pre> : <Markdown text={message.text} complete={message.complete} theme={theme} onLink={onLink} />}</div>}
   </section>

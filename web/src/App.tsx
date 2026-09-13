@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import type { MouseEvent as ReactMouseEvent } from 'react'
 import { ArrowUp, Check, Copy, FileText, Github, History, Image, Info, LoaderCircle, LogIn, Paperclip, Plug, Plus, ShieldCheck, Square, Terminal, Volume2, X } from 'lucide-react'
 import { demo, initial, send, subscribe } from './bridge'
 import type { Mode, Snapshot } from './bridge'
@@ -35,6 +36,8 @@ export default function App() {
   const autoConnectRequested = useRef(false)
   const [theme, setTheme] = useState(matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
   const [copied, setCopied] = useState<string | null>(null)
+  const [voiceMenu, setVoiceMenu] = useState<{ x: number; y: number } | null>(null)
+  const voiceMenuElement = useRef<HTMLDivElement>(null)
   const [sessionOpen, setSessionOpen] = useState(false)
   const sessionPanel = useRef<HTMLDivElement>(null)
   const scroll = useRef<HTMLDivElement>(null)
@@ -91,6 +94,16 @@ export default function App() {
     return () => document.removeEventListener('pointerdown', dismiss)
   }, [sessionOpen])
   useEffect(() => {
+    if (!voiceMenu) return
+    const dismiss = (event: PointerEvent) => {
+      if (event.target instanceof Node && !voiceMenuElement.current?.contains(event.target)) setVoiceMenu(null)
+    }
+    const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') setVoiceMenu(null) }
+    document.addEventListener('pointerdown', dismiss)
+    document.addEventListener('keydown', escape)
+    return () => { document.removeEventListener('pointerdown', dismiss); document.removeEventListener('keydown', escape) }
+  }, [voiceMenu])
+  useEffect(() => {
     if (nearBottom.current && scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight
   }, [state.messages, state.approvals])
   function request(type: string, fields = {}) { send(type, { sessionId: state.sessionId, ...fields }) }
@@ -108,6 +121,13 @@ export default function App() {
       if (demo) window.open(url, '_blank', 'noopener,noreferrer')
       else request('openUrl', { text: url })
     }
+  }
+  function openVoiceMenu(event: ReactMouseEvent<HTMLButtonElement>) {
+    event.preventDefault()
+    const bounds = event.currentTarget.getBoundingClientRect()
+    const x = event.clientX || bounds.left
+    const y = event.clientY || bounds.bottom
+    setVoiceMenu({ x: Math.max(8, Math.min(x, innerWidth - 288)), y: Math.max(8, Math.min(y, innerHeight - 328)) })
   }
   function submit() {
     if ((!draft.trim() && !attachments.length) || state.busy || connecting || sessionPending || modelPending || sending || reading.current || !state.sessionId) return
@@ -198,7 +218,8 @@ export default function App() {
       </div>}
       {state.messages.filter(message => message.role === 'user' || message.text.trim()).map(message => {
         if (message.role !== 'user' && message.role !== 'assistant') return <Activity key={`${message.id}-${message.complete}`} message={message} theme={theme}
-          available={speech.available(message.text)} playing={speech.playing === message.id} onRead={() => speech.toggle(message.id, message.text)}
+          available={speech.available(message.text)} configurable={speech.configurable(message.text)} playing={speech.playing === message.id}
+          onRead={() => speech.toggle(message.id, message.text)} onVoiceMenu={openVoiceMenu}
           onCopy={() => void copy(message.id, message.text)} onLink={openLink} />
         const turn = state.turns?.find(item => item.id === message.turnId)
         return <article key={message.id} className={`message ${message.role}`} tabIndex={message.role === 'assistant' ? 0 : undefined} aria-label={message.role === 'assistant' ? 'Copilot response' : 'Your message'}>
@@ -214,9 +235,9 @@ export default function App() {
           </div>
           {message.complete && <div className="message-actions">
             <button className="icon" title={copied === message.id ? 'Copied' : 'Copy response'} aria-label="Copy response" onClick={() => void copy(message.id, message.text)}>{copied === message.id ? <Check size={14} /> : <Copy size={14} />}</button>
-            <button className="icon" disabled={!speech.available(message.text)}
-              title={!speech.available(message.text) ? 'No matching local voice available' : speech.playing === message.id ? 'Stop reading' : 'Read aloud'}
-              aria-label={speech.playing === message.id ? 'Stop reading' : 'Read aloud'} onClick={() => speech.toggle(message.id, message.text)}>
+            <button className="icon" disabled={!speech.configurable(message.text)}
+              title={!speech.available(message.text) ? 'Right-click to choose a voice' : speech.playing === message.id ? 'Stop reading' : 'Read aloud (right-click to choose voice)'}
+              aria-label={speech.playing === message.id ? 'Stop reading' : 'Read aloud'} onClick={() => speech.toggle(message.id, message.text)} onContextMenu={openVoiceMenu}>
               {speech.playing === message.id ? <Square size={14} /> : <Volume2 size={14} />}
             </button>
           </div>}
@@ -231,6 +252,16 @@ export default function App() {
         </div>
       </section>)}
     </div>
+    {voiceMenu && <div ref={voiceMenuElement} className="voice-menu" role="menu" aria-label="Read aloud voice" style={{ left: voiceMenu.x, top: voiceMenu.y }}>
+      <button role="menuitemradio" aria-checked={!speech.voiceUri} onClick={() => { speech.selectVoice(null); setVoiceMenu(null) }}>
+        <span>Automatic</span><small>Matching local voice</small>{!speech.voiceUri && <Check size={14} />}
+      </button>
+      {speech.voices.map(voice => <button key={voice.voiceURI} role="menuitemradio" aria-checked={speech.voiceUri === voice.voiceURI}
+        title={voice.localService ? `${voice.name} (${voice.lang})` : `${voice.name} (${voice.lang}) may send text to the voice provider`}
+        onClick={() => { speech.selectVoice(voice.voiceURI); setVoiceMenu(null) }}>
+        <span>{voice.name}</span><small>{voice.lang} · {voice.localService ? 'Local' : 'Online'}</small>{speech.voiceUri === voice.voiceURI && <Check size={14} />}
+      </button>)}
+    </div>}
     {(error || state.error || speech.error) && <Banner key={state.sessionId + (error || state.error || speech.error)} text={error || state.error || speech.error || ''} kind="error" />}
     {state.mode === 'ApproveAll' && <Banner key={state.sessionId + '-auto'} text="Approve all: commands and result sharing are automatically approved, including enabled built-in and MCP tools. Tools may access files, contact services or execute code." kind="warning" />}
     <footer>

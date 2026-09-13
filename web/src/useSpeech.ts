@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import { localVoice, readableText } from './speech'
+import { preferredVoice, readableText } from './speech'
 
 export function useSpeech(sessionId: string) {
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([])
+  const [voiceUri, setVoiceUriState] = useState<string | null>(() => {
+    try { return localStorage.getItem('speechVoice') } catch { return null }
+  })
   const [playing, setPlaying] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const generation = useRef(0)
@@ -28,11 +31,20 @@ export function useSpeech(sessionId: string) {
   }, [])
   useEffect(() => { stop() }, [sessionId])
   function language(text: string) { return /[\u3040-\u30ff\u3400-\u9fff]/u.test(text) ? 'ja-JP' : 'en-US' }
-  function available(text: string) { return !!localVoice(voices, language(text)) && !!readableText(text) }
+  function available(text: string) { return !!preferredVoice(voices, language(text), voiceUri) && !!readableText(text) }
+  function configurable(text: string) { return voices.length > 0 && !!readableText(text) }
+  function selectVoice(value: string | null) {
+    stop()
+    setVoiceUriState(value)
+    try {
+      if (value) localStorage.setItem('speechVoice', value)
+      else localStorage.removeItem('speechVoice')
+    } catch { }
+  }
   function toggle(id: string, text: string) {
     if (playing === id) { stop(); return }
     stop()
-    const voice = localVoice(voices, language(text))
+    const voice = preferredVoice(voices, language(text), voiceUri)
     if (!voice) return
     setError(null)
     const identity = generation.current
@@ -46,5 +58,5 @@ export function useSpeech(sessionId: string) {
     setPlaying(id)
     window.speechSynthesis.speak(utterance)
   }
-  return { playing, available, toggle, stop, error }
+  return { playing, available, configurable, toggle, stop, error, voices, voiceUri, selectVoice }
 }
