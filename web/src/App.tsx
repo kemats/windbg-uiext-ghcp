@@ -307,17 +307,19 @@ export default function App() {
               onLoad={() => { setError(null); setModelPending(true); request('loadMcp') }}
               onAuthenticate={(server, forceReauth) => { setError(null); setModelPending(true); request(forceReauth ? 'reauthenticateMcp' : 'authenticateMcp', { text: server }) }}
               onReload={() => { setError(null); setModelPending(true); request('reloadTools') }} />
-            <div className="mode-switch" role="group" aria-label="Execution approval mode">
-              {(['AskEveryTime', 'ApproveAll'] as Mode[]).map(mode => <button type="button" key={mode} aria-pressed={state.mode === mode} disabled={!state.sessionId}
-                onClick={() => request('mode', { mode })}>{mode === 'AskEveryTime' ? 'Ask every time' : 'Approve all'}</button>)}
-            </div>
           </div>
           {state.busy ? <button type="button" className="icon stop" title="Cancel response" aria-label="Cancel response" disabled={modelPending || state.status === 'Switching model' || state.status === 'Updating tools'} onClick={() => request('cancel')}><Square size={15} /></button>
             : <button type="submit" className="icon primary" title={attachments.length ? 'Send message and attachments to Copilot' : 'Send message'} aria-label="Send message" disabled={(!draft.trim() && !attachments.length) || connecting || sessionPending || modelPending || sending || readingFiles || !state.sessionId}><ArrowUp size={19} /></button>}
         </div>
       </form>
       <div className="footer-meta">
-        <span className={`status ${state.busy ? 'working' : ''}`} role="status">{(state.busy || connecting) && <LoaderCircle size={12} className="spin" />}{connecting ? 'Connecting' : state.status === 'Ready' || state.status === 'Disconnected' ? '' : state.status}</span>
+        <div className="footer-left">
+          <div className="mode-switch" role="group" aria-label="Execution approval mode">
+            {(['AskEveryTime', 'ApproveAll'] as Mode[]).map(mode => <button type="button" key={mode} aria-pressed={state.mode === mode} disabled={!state.sessionId}
+              onClick={() => request('mode', { mode })}>{mode === 'AskEveryTime' ? 'Ask every time' : 'Approve all'}</button>)}
+          </div>
+          <span className={`status ${state.busy ? 'working' : ''}`} role="status">{(state.busy || connecting) && <LoaderCircle size={12} className="spin" />}{connecting ? 'Connecting' : state.status === 'Ready' || state.status === 'Disconnected' ? '' : state.status}</span>
+        </div>
         {sessionInfo}
       </div>
     </footer>

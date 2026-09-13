@@ -602,7 +602,7 @@ test('native model or attachment rejection preserves model and draft', async ({ 
   expect(requests.find((request: { type: string }) => request.type === 'send')).toMatchObject({ sessionId: 'same-session', text: 'Retain my draft', attachments: [{ name: 'notes.txt', mimeType: 'text/plain', data: Buffer.from('Explicit file').toString('base64') }] })
 })
 
-test('composer contains settings without submitting the draft', async ({ page }, testInfo) => {
+test('composer and footer settings do not submit the draft', async ({ page }, testInfo) => {
   await page.goto('/')
   const header = page.locator('header.topbar')
   await expect(header.getByLabel('GitHub account')).toHaveText('@demo-user')
@@ -613,7 +613,8 @@ test('composer contains settings without submitting the draft', async ({ page },
   const composer = page.locator('form.composer')
   const message = composer.getByRole('textbox', { name: 'Message', exact: true })
   const model = composer.getByRole('button', { name: 'Model', exact: true })
-  const modes = composer.getByRole('group', { name: 'Execution approval mode' })
+  const modes = page.locator('footer').getByRole('group', { name: 'Execution approval mode' })
+  await expect(composer.getByRole('group', { name: 'Execution approval mode' })).toHaveCount(0)
   await message.fill('Keep this draft while changing settings')
   await model.click()
   await page.getByRole('option', { name: 'Demo model', exact: true }).click()
@@ -631,7 +632,7 @@ test('composer contains settings without submitting the draft', async ({ page },
   expect(sessionTrigger.x + sessionTrigger.width).toBeCloseTo(frame.x + frame.width, 0)
   const text = (await message.boundingBox())!
   const send = composer.getByRole('button', { name: 'Send message', exact: true })
-  for (const control of [model, modes, send]) {
+  for (const control of [model, send]) {
     const bounds = (await control.boundingBox())!
     expect(bounds.x).toBeGreaterThanOrEqual(frame.x)
     expect(bounds.x + bounds.width).toBeLessThanOrEqual(frame.x + frame.width)
@@ -639,8 +640,8 @@ test('composer contains settings without submitting the draft', async ({ page },
     expect(bounds.y + bounds.height).toBeLessThanOrEqual(frame.y + frame.height)
   }
   const modeBounds = (await modes.boundingBox())!
-  const sendBounds = (await send.boundingBox())!
-  expect(modeBounds.x + modeBounds.width).toBeLessThanOrEqual(sendBounds.x)
+  expect(modeBounds.x).toBeCloseTo(frame.x, 0)
+  expect(modeBounds.y).toBeGreaterThanOrEqual(frame.y + frame.height)
   await page.screenshot({ path: testInfo.outputPath('integrated-composer.png') })
   await send.click()
   await expect(page.getByRole('region', { name: 'Execute command approval' })).toBeVisible()

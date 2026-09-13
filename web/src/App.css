@@ -87,9 +87,10 @@ button.account { border: 0; background: transparent; justify-content: flex-start
 .approval-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding: 8px 12px 12px; }
 footer { padding: 12px 16px 4px; border-top: 1px solid var(--border); flex-shrink: 0; }
 .footer-meta { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding-top: 2px; min-height: 32px; }
+.footer-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .composer-settings { display: flex; flex: 1; min-width: 0; gap: 6px 10px; flex-wrap: wrap; align-items: center; }
 select { min-width: 0; max-width: 100%; width: 155px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); padding: 5px; font-size: 12px; text-overflow: ellipsis; }
-.mode-switch { display: flex; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+.mode-switch { display: flex; flex-shrink: 0; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
 .mode-switch button { border: 0; border-radius: 0; font-size: 11px; padding: 5px 8px; white-space: nowrap; }
 .mode-switch button[aria-pressed='true'] { color: var(--accent); background: var(--accent-soft); font-weight: 650; }
 .composer { position: relative; border: 1px solid var(--border); border-radius: 5px; background: var(--bg); }
