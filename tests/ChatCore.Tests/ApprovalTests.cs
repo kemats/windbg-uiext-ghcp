@@ -1022,6 +1022,10 @@ public sealed class ApprovalTests
                 Assert.NotNull(title);
                 Assert.Equal("Copilot Chat", title.Title);
                 Assert.True(DbgX.Interfaces.UI.ToolWindowView.GetIsWindowPersisted(view));
+                var commands = DbgX.Interfaces.UI.ToolWindowView.GetToolWindowCommands(view);
+                var about = Assert.Single(commands.Items);
+                Assert.Equal("About this extension", about.Header);
+                Assert.True(about.Command.CanExecute(null));
             }
             catch (Exception exception) { failure = exception; }
         });

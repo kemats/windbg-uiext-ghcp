@@ -1,13 +1,17 @@
 using System.ComponentModel.Composition;
+using System.Diagnostics;
 using System.IO;
+using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Media;
 using Contracts;
 using DbgX.Interfaces;
 using DbgX.Interfaces.Listeners;
 using DbgX.Interfaces.Services;
 using DbgX.Interfaces.UI;
+using DbgX.Util;
 
 namespace WinDbgChatView;
 
@@ -15,6 +19,8 @@ namespace WinDbgChatView;
 [NamedPartMetadata("OssCopilotChat")]
 public sealed class ChatExtension : IDbgToolWindow
 {
+    private const string RepositoryUrl = "https://github.com/kemats/windbg-uiext-ghcp";
+
     [Import] public IDbgToolWindowManager ToolWindows { get; set; } = null!;
     [Import] public IDbgEngineSynchronizationContextSource EngineContext { get; set; } = null!;
     [Import] public IDbgConsole Console { get; set; } = null!;
@@ -59,7 +65,57 @@ public sealed class ChatExtension : IDbgToolWindow
         };
         ToolWindowView.SetTabTitle(view, new ToolWindowTitle("Copilot Chat"));
         ToolWindowView.SetIsWindowPersisted(view, true);
+        var commands = new ToolWindowCommandList();
+        commands.Items.Add(new ToolWindowCommand
+        {
+            Header = "About this extension",
+            Command = new DelegateCommand(() => ShowAboutDialog(view))
+        });
+        ToolWindowView.SetToolWindowCommands(view, commands);
         return view;
+    }
+
+    private static void ShowAboutDialog(FrameworkElement view)
+    {
+        var informationalVersion = typeof(ChatExtension).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+        var parts = informationalVersion?.Split('+', 2) ?? [];
+        var version = parts.Length > 0 && !string.IsNullOrWhiteSpace(parts[0]) ? parts[0] : "Unknown";
+        var commit = parts.Length > 1 && !string.IsNullOrWhiteSpace(parts[1]) ? parts[1] : "Unknown";
+
+        var repositoryLink = new Hyperlink(new Run(RepositoryUrl));
+        repositoryLink.Click += (_, _) => Process.Start(new ProcessStartInfo(RepositoryUrl) { UseShellExecute = true });
+
+        var details = new StackPanel { Margin = new Thickness(20) };
+        details.Children.Add(new TextBlock { Text = "WinDbg Copilot Chat", FontSize = 18, FontWeight = FontWeights.SemiBold });
+        details.Children.Add(new TextBlock { Text = $"Version: {version}", Margin = new Thickness(0, 16, 0, 0) });
+        details.Children.Add(new TextBlock { Text = $"Commit: {commit}", Margin = new Thickness(0, 6, 0, 0) });
+        details.Children.Add(new TextBlock(repositoryLink) { Margin = new Thickness(0, 12, 0, 0) });
+
+        var closeButton = new Button
+        {
+            Content = "Close",
+            IsDefault = true,
+            IsCancel = true,
+            MinWidth = 80,
+            Margin = new Thickness(0, 20, 0, 0),
+            HorizontalAlignment = HorizontalAlignment.Right
+        };
+        details.Children.Add(closeButton);
+
+        var dialog = new Window
+        {
+            Title = "About this extension",
+            Content = details,
+            SizeToContent = SizeToContent.WidthAndHeight,
+            MinWidth = 440,
+            ResizeMode = ResizeMode.NoResize,
+            ShowInTaskbar = false,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner
+        };
+        closeButton.Click += (_, _) => dialog.Close();
+        if (Window.GetWindow(view) is { } owner) dialog.Owner = owner;
+        dialog.ShowDialog();
     }
 }
 
