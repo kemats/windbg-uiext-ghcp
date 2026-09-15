@@ -25,23 +25,25 @@ To build from source:
 
 ## Install a release
 
+PowerShell 7.4+ is required. Windows PowerShell 5.1 is not supported.
+
 1. Download the Windows ZIP matching WinDbg's architecture and its SHA-256 sidecar from GitHub Releases.
 2. Verify the hash, then unblock the ZIP in Windows **Properties** before extracting it.
 3. Keep the archive layout intact, close WinDbg, and run:
 
 ```powershell
-./scripts/install.ps1 -WhatIf
-./scripts/install.ps1
+pwsh -File ./scripts/install.ps1 -WhatIf
+pwsh -File ./scripts/install.ps1
 ```
 
-Restart WinDbg and open **Copilot > Chat**. Release binaries are unsigned; see [Releases](docs/releasing.md) for verification and packaging details. Uninstall with `./scripts/uninstall.ps1`.
+Restart WinDbg and open **Copilot > Chat**. Release binaries are unsigned; see [Releases](docs/releasing.md) for verification and packaging details. Uninstall with `pwsh -File ./scripts/uninstall.ps1`.
 
 ## Build and install
 
 ```powershell
 ./scripts/build.ps1
-./scripts/install.ps1 -WhatIf
-./scripts/install.ps1
+pwsh -File ./scripts/install.ps1 -WhatIf
+pwsh -File ./scripts/install.ps1
 ```
 
 The package is written to `artifacts/package`. Close WinDbg before installation. For the F5 workflow, test commands, approved-feed setup, and build troubleshooting, see [Development](docs/development.md).

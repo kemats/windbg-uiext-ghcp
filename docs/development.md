@@ -15,8 +15,8 @@ The script restores locked frontend dependencies, runs frontend tests, builds we
 Close WinDbg before installing:
 
 ```powershell
-./scripts/install.ps1 -WhatIf
-./scripts/install.ps1
+pwsh -File ./scripts/install.ps1 -WhatIf
+pwsh -File ./scripts/install.ps1
 ```
 
 Only `WinDbgChatView.dll` and `WinDbgCopilot.Contracts.dll` belong at the package root. Private UI and WebView2 dependencies are under `WinDbgCopilotChat/ui`; `core` and `web` are sibling directories. Do not flatten the package or copy the entire `artifacts` directory. See [Design](design.md) for the assembly-isolation rationale.

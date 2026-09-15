@@ -1,3 +1,4 @@
+#requires -Version 7.4
 [CmdletBinding(SupportsShouldProcess)]
 param([string]$Destination = (Join-Path $env:LOCALAPPDATA 'dbg/UIExtensions'))
 $ErrorActionPreference = 'Stop'

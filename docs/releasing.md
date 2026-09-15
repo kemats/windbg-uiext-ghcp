@@ -65,8 +65,8 @@ This removes the ZIP's `Zone.Identifier` alternate data stream before extraction
 Extract the ZIP into a new directory, close WinDbg and run:
 
 ```powershell
-./scripts/install.ps1 -WhatIf
-./scripts/install.ps1
+pwsh -File ./scripts/install.ps1 -WhatIf
+pwsh -File ./scripts/install.ps1
 ```
 
-Do not flatten `artifacts/package` or copy the archive root into `UIExtensions`. The installer only copies package payloads. Keep the extracted installer/uninstaller for maintenance. Local history and credentials are not deleted by uninstall.
+PowerShell 7.4+ is required; Windows PowerShell 5.1 is not supported. Do not flatten `artifacts/package` or copy the archive root into `UIExtensions`. The installer only copies package payloads. Keep the extracted installer/uninstaller for maintenance. Local history and credentials are not deleted by uninstall.
