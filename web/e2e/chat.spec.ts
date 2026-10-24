@@ -472,6 +472,53 @@ test('published reasoning collapses on completion and supports speech and explic
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
 })
 
+test('Mermaid renders math and sequence diagrams while sanitizing SVG and preserving invalid source', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  await page.addInitScript(() => {
+    let handler: ((event: { data: unknown }) => void) | undefined
+    let sequence = 0
+    const diagrams = [
+      'flowchart TD\n  A["$$x^2 + y^2$$"] --> B[Result]',
+      'sequenceDiagram\n  participant User\n  participant Debugger\n  User->>Debugger: Inspect stack\n  Debugger-->>User: Frames',
+      'flowchart TD\n  A["<img src=x onerror=alert(1)>"] --> B[Safe]\n  click B href "https://example.com/"',
+      'not a valid diagram',
+    ]
+    Object.defineProperty(window, 'chrome', { configurable: true, value: { webview: {
+      addEventListener: (_type: string, callback: typeof handler) => { handler = callback }, removeEventListener: () => {},
+      postMessage: (request: { type: string }) => {
+        if (request.type !== 'ready') return
+        handler?.({ data: { version: 1, sequence: ++sequence, type: 'snapshot', payload: {
+          sessionId: 'session', mode: 'AskEveryTime', busy: false, status: 'Ready', error: null, model: null,
+          target: { available: false }, approvals: [], models: [],
+          messages: diagrams.map((source, index) => ({
+            id: `diagram-${index}`, role: 'assistant', complete: true, text: '```mermaid\n' + source + '\n```',
+          })),
+        } } })
+      },
+    } } })
+  })
+  await page.goto('/')
+  const messages = page.locator('.message.assistant')
+  await expect(messages).toHaveCount(4)
+  const math = messages.nth(0).locator('.diagram svg')
+  await expect(math).toBeVisible()
+  await expect(math.locator('.node')).toHaveCount(2)
+  await expect(math).toContainText('Result')
+  const sequence = messages.nth(1).locator('.diagram svg')
+  await expect(sequence).toBeVisible()
+  await expect(sequence).toContainText('Inspect stack')
+  await expect(sequence).toContainText('Frames')
+  await expect(messages.nth(2).locator('.diagram svg')).toBeVisible()
+  await expect(messages.nth(2)).toContainText('Safe')
+  await expect(messages.nth(3).locator('pre code')).toHaveText('not a valid diagram')
+  await expect(messages.nth(3).locator('.diagram')).toHaveCount(0)
+  await expect(page.locator('.diagram svg')).toHaveCount(3)
+  await expect(page.locator('.diagram foreignObject, .diagram a, .diagram image, .diagram script, .diagram [onerror], .diagram [onclick]')).toHaveCount(0)
+  await expect(page.locator('.mermaid-staging')).toHaveCount(0)
+  expect(errors).toEqual([])
+})
+
 test('model details and switching preserve the current conversation', async ({ page }, testInfo) => {
   await page.goto('/')
   await page.getByRole('textbox', { name: 'Message', exact: true }).fill('First turn')

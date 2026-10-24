@@ -13,7 +13,7 @@ const fallback = new Map([
 const licenseOverrides = new Map([['khroma', 'MIT']])
 const allowedLicenses = new Set([
   'MIT', 'ISC', 'BSD-2-Clause', 'BSD-3-Clause', 'Apache-2.0',
-  '(MPL-2.0 OR Apache-2.0)', 'OFL-1.1', 'Unlicense',
+  '(MPL-2.0 OR Apache-2.0)', 'EPL-2.0', 'OFL-1.1', 'Unlicense',
 ])
 
 rmSync(output, { recursive: true, force: true })
@@ -23,6 +23,12 @@ const manifest = [
   '',
   'Generated from web/package-lock.json. Each listed package is included in the production dependency graph.',
   'Its license or notice files are stored under npm/ using the package name and version.',
+  '',
+  'elkjs is distributed under EPL-2.0. Its source code is available under that license',
+  `at https://github.com/kieler/elkjs/tree/${lock.packages['node_modules/elkjs'].version}`,
+  '(use Code > Download ZIP, or clone the repository and check out that version tag).',
+  'The Java layout engine sources used by elkjs are available at https://github.com/eclipse-elk/elk.',
+  'This application does not modify the upstream elkjs sources; the web build bundles/minifies its JavaScript.',
   '',
   '| Package | Version | Declared license |',
   '| --- | --- | --- |',
